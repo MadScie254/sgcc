@@ -1,0 +1,22 @@
+{
+  "trial_counter": 10,
+  "best_score": 0.9699682207880763,
+  "best_params": {
+    "max_depth": 7,
+    "learning_rate": 0.0704236054285504,
+    "n_estimators": 550,
+    "subsample": 0.9267332441668699,
+    "colsample_bytree": 0.7980994558147375,
+    "reg_alpha": 0.678652327866055,
+    "reg_lambda": 2.120423900740356,
+    "scale_pos_weight": 6.0863180773778405,
+    "min_child_weight": 6,
+    "gamma": 4.795534328050225,
+    "tree_method": "hist",
+    "objective": "binary:logistic",
+    "eval_metric": "auc",
+    "random_state": 42,
+    "n_jobs": -1
+  },
+  "timestamp": "2026-01-25T18:50:41.893942"
+}

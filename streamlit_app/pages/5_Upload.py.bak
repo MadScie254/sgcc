@@ -1,0 +1,554 @@
+"""
+SGCC Platform - Dataset Upload & Analysis
+
+Upload custom datasets for analysis and training.
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from pathlib import Path
+import sys
+import io
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
+
+from deploy_utils import apply_custom_theme, show_header
+from data_loader import load_raw
+
+# Apply theme
+apply_custom_theme()
+
+st.set_page_config(
+    page_title="Dataset Upload - SGCC Platform",
+    page_icon="🔷",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+def analyze_dataset(df):
+    """Perform comprehensive dataset analysis."""
+    analysis = {}
+    
+    # Basic info
+    analysis['n_rows'] = len(df)
+    analysis['n_cols'] = len(df.columns)
+    analysis['memory_mb'] = df.memory_usage(deep=True).sum() / 1024**2
+    
+    # Missing values
+    missing = df.isnull().sum()
+    analysis['missing_cols'] = missing[missing > 0].to_dict()
+    analysis['missing_pct'] = (missing.sum() / (len(df) * len(df.columns))) * 100
+    
+    # Data types
+    analysis['dtypes'] = df.dtypes.value_counts().to_dict()
+    
+    # Numeric columns
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    analysis['n_numeric'] = len(numeric_cols)
+    
+    # Check for label column
+    possible_labels = ['label', 'target', 'theft', 'fraud', 'y']
+    label_col = None
+    for col in possible_labels:
+        if col in df.columns:
+            label_col = col
+            break
+    
+    if label_col:
+        analysis['label_col'] = label_col
+        analysis['class_distribution'] = df[label_col].value_counts().to_dict()
+        analysis['imbalance_ratio'] = df[label_col].value_counts().max() / df[label_col].value_counts().min()
+    
+    return analysis
+
+
+def plot_missing_values(df):
+    """Visualize missing values."""
+    missing = df.isnull().sum()
+    missing = missing[missing > 0].sort_values(ascending=True)
+    
+    if len(missing) == 0:
+        return None
+    
+    fig = go.Figure(go.Bar(
+        x=missing.values,
+        y=missing.index,
+        orientation='h',
+        marker=dict(color='#FF4444')
+    ))
+    
+    fig.update_layout(
+        title="Missing Values by Column",
+        xaxis_title="Count",
+        yaxis_title="Column",
+        template="plotly_dark",
+        height=max(300, len(missing) * 30)
+    )
+    
+    return fig
+
+
+def plot_numeric_distributions(df, max_cols=6):
+    """Plot distributions of numeric columns."""
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()[:max_cols]
+    
+    if len(numeric_cols) == 0:
+        return None
+    
+    n_cols = min(3, len(numeric_cols))
+    n_rows = (len(numeric_cols) + n_cols - 1) // n_cols
+    
+    fig = make_subplots(
+        rows=n_rows, cols=n_cols,
+        subplot_titles=numeric_cols
+    )
+    
+    for idx, col in enumerate(numeric_cols):
+        row = idx // n_cols + 1
+        col_idx = idx % n_cols + 1
+        
+        fig.add_trace(
+            go.Histogram(x=df[col].dropna(), name=col, showlegend=False, marker_color='#00C2A8'),
+            row=row, col=col_idx
+        )
+    
+    fig.update_layout(
+        title=f"Distribution of First {len(numeric_cols)} Numeric Features",
+        template="plotly_dark",
+        height=300 * n_rows,
+        showlegend=False
+    )
+    
+    return fig
+
+
+def plot_correlation_matrix(df, max_features=20):
+    """Plot correlation heatmap."""
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()[:max_features]
+    
+    if len(numeric_cols) < 2:
+        return None
+    
+    corr = df[numeric_cols].corr()
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=corr.values,
+        x=corr.columns,
+        y=corr.columns,
+        colorscale='RdBu',
+        zmid=0,
+        text=corr.values,
+        texttemplate='%{text:.2f}',
+        textfont={"size": 8},
+        colorbar=dict(title="Correlation")
+    ))
+    
+    fig.update_layout(
+        title=f"Correlation Matrix (Top {len(numeric_cols)} Features)",
+        template="plotly_dark",
+        height=600,
+        xaxis={'side': 'bottom'},
+        yaxis={'autorange': 'reversed'}
+    )
+    
+    return fig
+
+
+def main():
+    """Main upload page."""
+    
+    show_header(
+        "Dataset Upload & Analysis",
+        "Upload custom datasets for automatic profiling and model training"
+    )
+    
+    # Upload section
+    st.markdown("""
+    <h2 style="color: #FAFAFA; font-size: 28px; font-weight: 700; letter-spacing: 1px; margin-bottom: 20px;">
+        ▸ UPLOAD DATASET
+    </h2>
+    """, unsafe_allow_html=True)
+    
+    uploaded_file = st.file_uploader(
+        "Drag and drop your CSV file here",
+        type=['csv'],
+        help="Upload a CSV file with customer consumption data"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Read CSV
+            df = pd.read_csv(uploaded_file)
+            
+            st.success(f"■ DATASET LOADED: {len(df):,} rows × {len(df.columns)} columns")
+            
+            # Store in session state
+            st.session_state['uploaded_df'] = df
+            st.session_state['uploaded_filename'] = uploaded_file.name
+            
+            st.markdown("---")
+            
+            # Analysis tabs
+            tabs = st.tabs(["OVERVIEW", "DATA QUALITY", "DISTRIBUTIONS", "CORRELATIONS"])
+            
+            # Tab 1: Overview
+            with tabs[0]:
+                st.markdown("""
+                <h3 style="color: #00C2A8; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;">
+                    DATASET OVERVIEW
+                </h3>
+                """, unsafe_allow_html=True)
+                
+                analysis = analyze_dataset(df)
+                
+                # Metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, #1a2a3a 0%, #0f1923 100%);
+                        padding: 25px;
+                        border-radius: 10px;
+                        border-left: 4px solid #00C2A8;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                        text-align: center;
+                    ">
+                        <div style="color: #AAAAAA; font-size: 12px; font-weight: 600; letter-spacing: 1px; margin-bottom: 10px;">
+                            TOTAL ROWS
+                        </div>
+                        <div style="color: #FAFAFA; font-size: 36px; font-weight: 700;">
+                            {analysis['n_rows']:,}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, #3a2a1a 0%, #231a0f 100%);
+                        padding: 25px;
+                        border-radius: 10px;
+                        border-left: 4px solid #FFB020;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                        text-align: center;
+                    ">
+                        <div style="color: #AAAAAA; font-size: 12px; font-weight: 600; letter-spacing: 1px; margin-bottom: 10px;">
+                            COLUMNS
+                        </div>
+                        <div style="color: #FAFAFA; font-size: 36px; font-weight: 700;">
+                            {analysis['n_cols']}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col3:
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, #2a1a3a 0%, #1a0f23 100%);
+                        padding: 25px;
+                        border-radius: 10px;
+                        border-left: 4px solid #7B68EE;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                        text-align: center;
+                    ">
+                        <div style="color: #AAAAAA; font-size: 12px; font-weight: 600; letter-spacing: 1px; margin-bottom: 10px;">
+                            NUMERIC FEATURES
+                        </div>
+                        <div style="color: #FAFAFA; font-size: 36px; font-weight: 700;">
+                            {analysis['n_numeric']}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col4:
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, #3a1a1a 0%, #230f0f 100%);
+                        padding: 25px;
+                        border-radius: 10px;
+                        border-left: 4px solid #FF4444;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                        text-align: center;
+                    ">
+                        <div style="color: #AAAAAA; font-size: 12px; font-weight: 600; letter-spacing: 1px; margin-bottom: 10px;">
+                            MEMORY (MB)
+                        </div>
+                        <div style="color: #FAFAFA; font-size: 36px; font-weight: 700;">
+                            {analysis['memory_mb']:.1f}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # Data preview
+                st.markdown("**Dataset Preview (First 10 Rows)**")
+                st.dataframe(df.head(10), width='stretch')
+                
+                # Column info
+                st.markdown("**Column Information**")
+                col_info = pd.DataFrame({
+                    'Column': df.columns,
+                    'Type': df.dtypes.astype(str),
+                    'Non-Null': df.count(),
+                    'Null %': ((df.isnull().sum() / len(df)) * 100).round(2)
+                })
+                st.dataframe(col_info, width='stretch', hide_index=True)
+                
+                # Class distribution if available
+                if 'label_col' in analysis:
+                    st.markdown("**Class Distribution**")
+                    
+                    col1, col2 = st.columns([1, 1])
+                    
+                    with col1:
+                        dist = analysis['class_distribution']
+                        fig = go.Figure(data=[
+                            go.Bar(
+                                x=list(dist.keys()),
+                                y=list(dist.values()),
+                                marker=dict(color=['#00C851', '#FF4444']),
+                                text=list(dist.values()),
+                                textposition='outside'
+                            )
+                        ])
+                        fig.update_layout(
+                            title=f"Label Distribution ({analysis['label_col']})",
+                            xaxis_title="Class",
+                            yaxis_title="Count",
+                            template="plotly_dark",
+                            height=400
+                        )
+                        st.plotly_chart(fig, width='stretch')
+                    
+                    with col2:
+                        st.markdown("""
+                        <div style="
+                            background: #262730;
+                            padding: 20px;
+                            border-radius: 10px;
+                            margin-top: 40px;
+                        ">
+                        """, unsafe_allow_html=True)
+                        
+                        st.metric("Imbalance Ratio", f"{analysis['imbalance_ratio']:.2f}:1")
+                        
+                        total = sum(dist.values())
+                        for cls, count in dist.items():
+                            pct = (count / total) * 100
+                            st.markdown(f"**Class {cls}**: {count:,} ({pct:.1f}%)")
+                        
+                        st.markdown("</div>", unsafe_allow_html=True)
+            
+            # Tab 2: Data Quality
+            with tabs[1]:
+                st.markdown("""
+                <h3 style="color: #FFB020; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;">
+                    DATA QUALITY ASSESSMENT
+                </h3>
+                """, unsafe_allow_html=True)
+                
+                # Missing values
+                if analysis['missing_pct'] > 0:
+                    st.warning(f"■ MISSING DATA DETECTED: {analysis['missing_pct']:.2f}% of cells are null")
+                    
+                    fig = plot_missing_values(df)
+                    if fig:
+                        st.plotly_chart(fig, width='stretch')
+                    
+                    # Detailed missing info
+                    st.markdown("**Missing Values by Column**")
+                    missing_df = pd.DataFrame({
+                        'Column': list(analysis['missing_cols'].keys()),
+                        'Missing Count': list(analysis['missing_cols'].values()),
+                        'Missing %': [
+                            (count / len(df)) * 100 
+                            for count in analysis['missing_cols'].values()
+                        ]
+                    }).sort_values('Missing %', ascending=False)
+                    st.dataframe(missing_df, width='stretch', hide_index=True)
+                else:
+                    st.success("■ NO MISSING VALUES DETECTED")
+                
+                st.markdown("---")
+                
+                # Data type distribution
+                st.markdown("**Data Types Distribution**")
+                dtype_df = pd.DataFrame({
+                    'Data Type': list(analysis['dtypes'].keys()),
+                    'Count': list(analysis['dtypes'].values())
+                })
+                
+                fig = go.Figure(data=[
+                    go.Pie(
+                        labels=[str(k) for k in dtype_df['Data Type']],
+                        values=dtype_df['Count'],
+                        hole=0.4,
+                        marker=dict(colors=['#00C2A8', '#FFB020', '#7B68EE', '#FF4444'])
+                    )
+                ])
+                fig.update_layout(
+                    title="Column Types Distribution",
+                    template="plotly_dark",
+                    height=400
+                )
+                st.plotly_chart(fig, width='stretch')
+                
+                # Recommendations
+                st.markdown("---")
+                st.markdown("""
+                <h4 style="color: #7B68EE; font-size: 18px; font-weight: 700;">
+                    RECOMMENDATIONS
+                </h4>
+                """, unsafe_allow_html=True)
+                
+                recommendations = []
+                
+                if analysis['missing_pct'] > 5:
+                    recommendations.append("• Consider imputing or removing columns with >20% missing values")
+                
+                if 'label_col' in analysis and analysis['imbalance_ratio'] > 5:
+                    recommendations.append("• High class imbalance detected - SMOTE+ENN preprocessing recommended")
+                
+                if analysis['n_rows'] < 1000:
+                    recommendations.append("• Small dataset size - consider collecting more data for robust training")
+                
+                if analysis['n_numeric'] < 5:
+                    recommendations.append("• Limited numeric features - consider feature engineering")
+                
+                if len(recommendations) > 0:
+                    for rec in recommendations:
+                        st.info(rec)
+                else:
+                    st.success("■ DATASET QUALITY EXCELLENT - Ready for training")
+            
+            # Tab 3: Distributions
+            with tabs[2]:
+                st.markdown("""
+                <h3 style="color: #7B68EE; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;">
+                    FEATURE DISTRIBUTIONS
+                </h3>
+                """, unsafe_allow_html=True)
+                
+                fig = plot_numeric_distributions(df, max_cols=9)
+                if fig:
+                    st.plotly_chart(fig, width='stretch')
+                else:
+                    st.warning("■ NO NUMERIC COLUMNS DETECTED")
+                
+                # Statistical summary
+                st.markdown("**Statistical Summary**")
+                st.dataframe(df.describe(), width='stretch')
+            
+            # Tab 4: Correlations
+            with tabs[3]:
+                st.markdown("""
+                <h3 style="color: #00C851; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;">
+                    CORRELATION ANALYSIS
+                </h3>
+                """, unsafe_allow_html=True)
+                
+                fig = plot_correlation_matrix(df, max_features=20)
+                if fig:
+                    st.plotly_chart(fig, width='stretch')
+                    
+                    # High correlations
+                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()[:20]
+                    if len(numeric_cols) >= 2:
+                        corr = df[numeric_cols].corr()
+                        
+                        # Find high correlations (excluding diagonal)
+                        high_corr = []
+                        for i in range(len(corr.columns)):
+                            for j in range(i+1, len(corr.columns)):
+                                if abs(corr.iloc[i, j]) > 0.7:
+                                    high_corr.append({
+                                        'Feature 1': corr.columns[i],
+                                        'Feature 2': corr.columns[j],
+                                        'Correlation': corr.iloc[i, j]
+                                    })
+                        
+                        if len(high_corr) > 0:
+                            st.markdown("**High Correlations Detected (|r| > 0.7)**")
+                            high_corr_df = pd.DataFrame(high_corr).sort_values('Correlation', ascending=False)
+                            st.dataframe(high_corr_df, width='stretch', hide_index=True)
+                            st.info("• Consider feature selection or PCA to reduce multicollinearity")
+                else:
+                    st.warning("■ INSUFFICIENT NUMERIC COLUMNS FOR CORRELATION ANALYSIS")
+            
+            # Training section
+            st.markdown("---")
+            st.markdown("""
+            <h2 style="color: #FAFAFA; font-size: 28px; font-weight: 700; letter-spacing: 1px; margin-top: 40px;">
+                ▸ TRAINING ACTIONS
+            </h2>
+            """, unsafe_allow_html=True)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("▶ SAVE AS TRAINING DATA", width='stretch', type="primary"):
+                    # Save to data folder
+                    output_path = Path("data") / "uploaded_dataset.csv"
+                    output_path.parent.mkdir(exist_ok=True)
+                    df.to_csv(output_path, index=False)
+                    st.success(f"■ SAVED: {output_path}")
+            
+            with col2:
+                if st.button("▶ START TRAINING", width='stretch'):
+                    st.info("Navigate to the Model Training page to begin training")
+                    st.page_link("pages/2_Train.py", label="Go to Training →", icon="▶")
+            
+            with col3:
+                # Download analysis report
+                csv = df.describe().to_csv()
+                st.download_button(
+                    "▼ DOWNLOAD ANALYSIS",
+                    csv,
+                    "dataset_analysis.csv",
+                    "text/csv",
+                    width='stretch'
+                )
+        
+        except Exception as e:
+            st.error(f"■ ERROR LOADING FILE: {str(e)}")
+            st.exception(e)
+    
+    else:
+        # Instructions when no file uploaded
+        st.info("""
+        **Upload a CSV file to begin automatic analysis:**
+        
+        • Dataset profiling (rows, columns, types, memory)
+        • Data quality assessment (missing values, duplicates)
+        • Feature distribution analysis
+        • Correlation matrix visualization
+        • Class imbalance detection
+        • Automated recommendations
+        
+        **Supported format:** CSV files with customer consumption data
+        """)
+        
+        # Show example with current dataset
+        st.markdown("---")
+        st.markdown("**Or analyze the current dataset:**")
+        
+        if st.button("▶ ANALYZE CURRENT DATASET", type="primary"):
+            try:
+                df_long, labels = load_raw("data/datasetsmall.csv")
+                st.session_state['uploaded_df'] = df_long
+                st.session_state['uploaded_filename'] = "datasetsmall.csv"
+                st.rerun()
+            except Exception as e:
+                st.error(f"■ ERROR: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()

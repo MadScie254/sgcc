@@ -1,0 +1,127 @@
+data:
+  processed_features_path: artifacts/features.csv
+  raw_data_path: data/data_augmented.csv
+deployment:
+  min_confidence: 0.6
+  threshold: 0.4
+evaluation:
+  max_error_samples: 100
+  metrics:
+  - recall
+  - precision
+  - f1
+  - accuracy
+  - auc
+  - gmean
+  - mcc
+  save_error_samples: true
+  stratify: true
+  targets:
+    min_f1: 0.75
+    min_precision: 0.7
+    min_recall: 0.85
+  test_size: 0.2
+features:
+  missing_sequence_threshold: 2
+  peak_day_percentile: 0.85
+  rolling_windows:
+  - 3
+  - 6
+  - 12
+  sudden_drop_threshold: 0.6
+  temporal_lags:
+  - 1
+  - 2
+  - 3
+  - 6
+  zero_consumption_threshold: 0.01
+logging:
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  level: INFO
+model:
+  default_params:
+    eval_metric:
+    - auc
+    - logloss
+    n_jobs: -1
+    objective: binary:logistic
+    random_state: 42
+    tree_method: hist
+    use_label_encoder: false
+  optuna:
+    cv_folds: 3
+    n_trials: 10
+    scoring_weights:
+      f1: 0.15
+      precision: 0.25
+      recall: 0.6
+    search_space:
+      colsample_bytree:
+        high: 0.95
+        low: 0.75
+      gamma:
+        high: 7.0
+        low: 0.0
+      learning_rate:
+        high: 0.25
+        log: true
+        low: 0.003
+      max_depth:
+        high: 15
+        low: 5
+      min_child_weight:
+        high: 10
+        low: 1
+      n_estimators:
+        high: 1200
+        low: 200
+        step: 50
+      reg_alpha:
+        high: 20.0
+        low: 0.0
+      reg_lambda:
+        high: 20.0
+        low: 1.5
+      scale_pos_weight:
+        high: 20
+        low: 1
+      subsample:
+        high: 0.95
+        low: 0.75
+    timeout: null
+  quick_train:
+    cv_folds: 3
+    enabled: false
+    n_trials: 10
+    sample_fraction: 0.4
+  type: xgboost
+monitoring:
+  drift_detection:
+    alpha: 0.05
+    enabled: true
+    reference_window: 1000
+    test_window: 500
+paths:
+  artifacts: artifacts
+  logs: logs
+  models: models
+  tests: tests
+persistence:
+  model_filename: xgb_best_ultra.joblib
+  save_format: joblib
+  scaler_filename: scaler_ultra.joblib
+preprocessing:
+  scaling:
+    feature_range:
+    - 0
+    - 1
+    method: minmax
+  smote_enn:
+    enn:
+      n_neighbors: 7
+      sampling_strategy: all
+    random_state: 42
+    smote:
+      k_neighbors: 9
+      sampling_strategy: 0.95
+random_state: 42

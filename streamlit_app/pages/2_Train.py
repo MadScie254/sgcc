@@ -1,0 +1,395 @@
+"""
+SGCC Theft Detector - Train Page
+
+Model training and retraining interface.
+"""
+
+import streamlit as st
+from design_system import get_custom_css, get_icon, fa_icon, LOTTIE_ANIMATIONS, load_lottie_url
+import pandas as pd
+import numpy as np
+import json
+from pathlib import Path
+import sys
+import time
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
+
+from deploy_utils import apply_custom_theme, show_header
+from train import train_pipeline
+
+# Apply theme
+apply_custom_theme()
+
+st.set_page_config(
+    page_title="Model Training - SGCC Platform",
+    page_icon="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/svgs/solid/gears.svg",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+@st.cache_data
+def load_training_history():
+    """Load training history if available."""
+    metrics_file = Path("artifacts/metrics.json")
+    if metrics_file.exists():
+        with open(metrics_file, 'r') as f:
+            return json.load(f)
+    return None
+
+
+@st.cache_data
+def load_preprocessing_report():
+    """Load preprocessing report if available."""
+    report_file = Path("artifacts/preprocess_report.json")
+    if report_file.exists():
+        with open(report_file, 'r') as f:
+            return json.load(f)
+    return None
+
+
+
+# Apply custom design system
+st.markdown(get_custom_css(), unsafe_allow_html=True)
+
+def main():
+    """Main training page."""
+    
+    show_header(
+        "Model Training",
+        "Train or retrain the XGBoost theft detection model",
+        icon=fa_icon("gears", 22, "#00C2A8")
+    )
+    
+    # Check for existing model
+    model_exists = Path("models/xgb_best.joblib").exists()
+    
+    if model_exists:
+        st.success("Status: Trained model detected (`models/xgb_best.joblib`)")
+        
+        # Load and display metrics
+        metrics = load_training_history()
+        if metrics:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Recall", f"{metrics.get('recall', 0):.3f}")
+            with col2:
+                st.metric("Precision", f"{metrics.get('precision', 0):.3f}")
+            with col3:
+                st.metric("F1 Score", f"{metrics.get('f1', 0):.3f}")
+            with col4:
+                st.metric("AUC", f"{metrics.get('auc', 0):.3f}")
+    else:
+        st.warning("Status: No model detected. Please train a model first.")
+    
+    st.markdown("---")
+    
+    # Training options
+    st.markdown("""
+    <h2 style="color: #FAFAFA; font-size: 28px; font-weight: 700; letter-spacing: 1px; margin-bottom: 20px;">
+        ▸ TRAINING CONFIGURATION
+    </h2>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        training_mode = st.radio(
+            "Select Training Mode",
+            [
+                "Quick Train (Demo Mode - 5% data, 10 trials)",
+                "Full Train (100% data, 60 trials)",
+                "Custom Configuration"
+            ],
+            help="Quick mode for testing, Full mode for production"
+        )
+        
+        # Initialize with defaults to avoid UnboundLocalError
+        n_trials = 30
+        sample_fraction = 1.0
+        cv_folds = 5
+        test_size = 0.2
+        
+        if "Custom" in training_mode or "CUSTOM" in training_mode:
+            st.markdown("### Custom Parameters")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                n_trials = st.number_input(
+                    "Optuna Trials",
+                    min_value=5,
+                    max_value=200,
+                    value=30,
+                    step=5,
+                    help="More trials = better optimization but slower"
+                )
+                
+                cv_folds = st.number_input(
+                    "Cross-Validation Folds",
+                    min_value=2,
+                    max_value=10,
+                    value=5,
+                    help="Number of CV folds for evaluation"
+                )
+            
+            with col_b:
+                sample_fraction = st.slider(
+                    "Data Sample Fraction",
+                    min_value=0.05,
+                    max_value=1.0,
+                    value=1.0,
+                    step=0.05,
+                    help="Fraction of data to use (1.0 = all data)"
+                )
+                
+                test_size = st.slider(
+                    "Test Set Size",
+                    min_value=0.1,
+                    max_value=0.4,
+                    value=0.2,
+                    step=0.05,
+                    help="Fraction of data for testing"
+                )
+    
+    with col2:
+        st.markdown("### Training Info")
+        
+        if "Quick" in training_mode:
+            st.info("""
+            **Quick Train Mode**
+            - 5% data sample
+            - 10 Optuna trials
+            - 3-fold CV
+            - ~5-10 minutes
+            
+            Ideal for: Testing, demos
+            """)
+            quick_mode = True
+        elif "Full" in training_mode:
+            st.info("""
+            **Full Train Mode**
+            - 100% data
+            - 60 Optuna trials
+            - 5-fold CV
+            - ~2-4 hours
+            
+            Ideal for: Production
+            """)
+            quick_mode = False
+        else:
+            st.info("""
+            **Custom Mode**
+            Configure all training
+            parameters manually.
+            
+            Estimated time depends
+            on your settings.
+            """)
+            quick_mode = sample_fraction < 1.0 or n_trials < 60
+    
+    st.markdown("---")
+    
+    # Training button
+    st.markdown("""
+    <h2 style="color: #FAFAFA; font-size: 28px; font-weight: 700; letter-spacing: 1px; margin-bottom: 20px;">
+        ▸ INITIATE TRAINING
+    </h2>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col2:
+        start_training = st.button(
+            "Start Training",
+            use_container_width=True,
+            type="primary",
+            help="Begin model training pipeline"
+        )
+    
+    if start_training:
+        st.markdown("---")
+        st.markdown("""
+        <h3 style="color: #00C2A8; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;">
+            TRAINING PROGRESS
+        </h3>
+        """, unsafe_allow_html=True)
+        
+        # Create progress containers
+        status_placeholder = st.empty()
+        progress_bar = st.progress(0)
+        metrics_placeholder = st.empty()
+        
+        try:
+            # Check for data
+            data_path = Path("data/datasetsmall.csv")
+            if not data_path.exists():
+                st.error("Dataset not found. Please download first:")
+                st.code("bash scripts/download_data.sh")
+                return
+            
+            # Start training
+            start_time = time.time()
+            
+            status_placeholder.info("Step 1/7: Loading raw data...")
+            progress_bar.progress(0.1)
+            time.sleep(0.5)
+            
+            status_placeholder.info("Step 2/7: Engineering features...")
+            progress_bar.progress(0.2)
+            time.sleep(0.5)
+            
+            status_placeholder.info("Step 3/7: Splitting train/test...")
+            progress_bar.progress(0.3)
+            time.sleep(0.5)
+            
+            status_placeholder.info("Step 4/7: Applying SMOTE+ENN preprocessing...")
+            progress_bar.progress(0.4)
+            time.sleep(0.5)
+            
+            status_placeholder.info("Step 5/7: Normalizing features...")
+            progress_bar.progress(0.5)
+            time.sleep(0.5)
+            
+            status_placeholder.info("Step 6/7: Training XGBoost with Optuna (this may take a while)...")
+            progress_bar.progress(0.6)
+            
+            # Run training pipeline
+            results = train_pipeline(
+                config_path="config.yaml",
+                quick_mode=quick_mode
+            )
+            
+            progress_bar.progress(0.9)
+            status_placeholder.info("Step 7/7: Saving model and artifacts...")
+            time.sleep(0.5)
+            
+            progress_bar.progress(1.0)
+            
+            # Training complete
+            elapsed_time = time.time() - start_time
+            
+            status_placeholder.success(f"Training completed in {elapsed_time/60:.1f} minutes.")
+            
+            # Display results
+            st.markdown("""
+            <h3 style="color: #00C2A8; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; margin-top: 20px;">
+                TRAINING RESULTS
+            </h3>
+            """, unsafe_allow_html=True)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("""
+                <div style="background: #262730; padding: 20px; border-radius: 10px; text-align: center;">
+                    <div style="color: #AAAAAA; font-size: 12px; margin-bottom: 5px;">BEST COMPOSITE SCORE</div>
+                    <div style="color: #00C2A8; font-size: 32px; font-weight: 700;">
+                        {:.4f}
+                    </div>
+                </div>
+                """.format(results['best_score']), unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown("""
+                <div style="background: #262730; padding: 20px; border-radius: 10px; text-align: center;">
+                    <div style="color: #AAAAAA; font-size: 12px; margin-bottom: 5px;">OPTUNA TRIALS</div>
+                    <div style="color: #FFB020; font-size: 32px; font-weight: 700;">
+                        {}
+                    </div>
+                </div>
+                """.format(results['n_trials']), unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown("""
+                <div style="background: #262730; padding: 20px; border-radius: 10px; text-align: center;">
+                    <div style="color: #AAAAAA; font-size: 12px; margin-bottom: 5px;">FEATURES</div>
+                    <div style="color: #7B68EE; font-size: 32px; font-weight: 700;">
+                        {}
+                    </div>
+                </div>
+                """.format(results['n_features']), unsafe_allow_html=True)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Best parameters
+            with st.expander("Best Hyperparameters", expanded=True):
+                params_df = pd.DataFrame([
+                    {"Parameter": k, "Value": v}
+                    for k, v in results['best_params'].items()
+                    if k not in ['objective', 'eval_metric', 'use_label_encoder', 'random_state', 'n_jobs']
+                ])
+                st.dataframe(params_df, use_container_width=True, hide_index=True)
+            
+            # Preprocessing report
+            preprocess_report = results.get('preprocessing_report', {})
+            if preprocess_report:
+                with st.expander("Preprocessing Statistics", expanded=False):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("**Original Distribution**")
+                        orig_dist = preprocess_report.get('original_distribution', {})
+                        st.json(orig_dist)
+                    
+                    with col2:
+                        st.markdown("**Resampled Distribution**")
+                        resamp_dist = preprocess_report.get('resampled_distribution', {})
+                        st.json(resamp_dist)
+            
+            st.balloons()
+            
+            # Next steps
+            st.markdown("""
+            <h3 style="color: #FFB020; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; margin-top: 20px;">
+                NEXT STEPS
+            </h3>
+            """, unsafe_allow_html=True)
+            st.info("""
+            1. **Evaluate Model**: Go to the Predict page to test predictions
+            2. **Understand Decisions**: Visit the Explain page for SHAP analysis
+            3. **Deploy**: Use the trained model for production inference
+            """)
+            
+        except Exception as e:
+            progress_bar.empty()
+            status_placeholder.error(f"Training failed: {str(e)}")
+            st.exception(e)
+    
+    # Training history
+    st.markdown("---")
+    st.markdown("""
+    <h2 style="color: #FAFAFA; font-size: 28px; font-weight: 700; letter-spacing: 1px; margin-top: 40px;">
+        ▸ TRAINING HISTORY
+    </h2>
+    """, unsafe_allow_html=True)
+    
+    preprocessing_report = load_preprocessing_report()
+    
+    if preprocessing_report:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### Preprocessing Stats")
+            st.json(preprocessing_report)
+        
+        with col2:
+            st.markdown("### Model Info")
+            if model_exists:
+                model_path = Path("models/xgb_best.joblib")
+                model_size = model_path.stat().st_size / 1024 / 1024  # MB
+                
+                st.markdown(f"""
+                - **Model File**: `{model_path}`
+                - **Size**: {model_size:.2f} MB
+                - **Status**: Ready for inference
+                """)
+            else:
+                st.warning("No model trained yet")
+    else:
+        st.info("No training history available. Train a model to see statistics.")
+
+
+if __name__ == "__main__":
+    main()

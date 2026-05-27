@@ -1,0 +1,170 @@
+# ULTRA-OPTIMIZED CONFIG FOR 85%+ RECALL
+# This configuration is designed to maximize theft detection accuracy
+
+# Random seed for reproducibility
+random_state: 42
+
+# Data paths
+data:
+  raw_data_path: "data/data_augmented.csv"  # Use augmented dataset
+  processed_features_path: "artifacts/features.csv"
+
+# Feature engineering
+features:
+  # Temporal features
+  temporal_lags: [1, 2, 3, 6]  # month lags
+  rolling_windows: [3, 6, 12]  # months
+  
+  # Anomaly thresholds
+  zero_consumption_threshold: 0.01
+  sudden_drop_threshold: 0.6  # More aggressive detection
+  peak_day_percentile: 0.85
+  missing_sequence_threshold: 2
+
+# Preprocessing - AGGRESSIVE BALANCING
+preprocessing:
+  smote_enn:
+    random_state: 42
+    smote:
+      k_neighbors: 9  # Maximum diversity in synthetic samples
+      sampling_strategy: 0.95  # Near-perfect balance (95% minority)
+    enn:
+      n_neighbors: 7  # Maximum noise removal
+      sampling_strategy: "all"
+  
+  scaling:
+    method: "minmax"
+    feature_range: [0, 1]
+
+# Model training - ULTRA-OPTIMIZED FOR RECALL
+model:
+  type: "xgboost"
+  
+  default_params:
+    objective: "binary:logistic"
+    eval_metric: ["auc", "logloss"]
+    use_label_encoder: false
+    random_state: 42
+    n_jobs: -1
+    tree_method: "hist"  # Faster training
+  
+  # Optuna hyperparameter optimization
+  optuna:
+    n_trials: 150  # More trials for better optimization
+    cv_folds: 3  # Reduced from 5 for faster training
+    timeout: null
+    
+    # RECALL-FOCUSED SCORING (targeting 85%+)
+    scoring_weights:
+      recall: 0.60  # Maximum recall weight
+      precision: 0.25
+      f1: 0.15
+    
+    # EXPANDED SEARCH SPACE
+    search_space:
+      max_depth:
+        low: 5
+        high: 15  # Deeper trees for complex patterns
+      learning_rate:
+        low: 0.003
+        high: 0.25
+        log: true
+      n_estimators:
+        low: 200  # More estimators = better learning
+        high: 1200
+        step: 50
+      subsample:
+        low: 0.75
+        high: 0.95  # Reduce overfitting
+      colsample_bytree:
+        low: 0.75
+        high: 0.95
+      reg_alpha:
+        low: 0.0
+        high: 20.0  # Stronger regularization
+      reg_lambda:
+        low: 1.5
+        high: 20.0
+      scale_pos_weight:
+        low: 1
+        high: 20  # Account for any remaining imbalance
+      min_child_weight:
+        low: 1
+        high: 10
+      gamma:
+        low: 0.0
+        high: 7.0  # Prevent overfitting
+  
+  # Quick training mode (for testing)
+  quick_train:
+    enabled: false
+    sample_fraction: 0.1
+    n_trials: 20
+    cv_folds: 3
+
+# Evaluation
+evaluation:
+  test_size: 0.2
+  stratify: true
+  
+  # Performance targets
+  targets:
+    min_recall: 0.85
+    min_precision: 0.70
+    min_f1: 0.75
+  
+  # Metrics to compute
+  metrics:
+    - recall
+    - precision
+    - f1
+    - accuracy
+    - auc
+    - gmean
+    - mcc
+  
+  # Error analysis
+  save_error_samples: true
+  max_error_samples: 100
+
+# Model persistence
+persistence:
+  save_format: "joblib"
+  model_filename: "xgb_best_ultra.joblib"
+  scaler_filename: "scaler_ultra.joblib"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# Deployment
+deployment:
+  threshold: 0.4  # Lower threshold for higher recall
+  min_confidence: 0.6
+  
+# Monitoring
+monitoring:
+  drift_detection:
+    enabled: true
+    reference_window: 1000
+    test_window: 500
+    alpha: 0.05
+
+# Memory management for low-resource PCs
+memory:
+  enable_low_memory_mode: true
+  batch_size: 512
+  chunk_size: 5000
+  max_memory_gb: 4.0  # Adjust based on your PC's RAM
+  checkpoint_interval: 5  # Save checkpoint every N trials
+  checkpoint_dir: "artifacts/checkpoints"
+  use_sparse_matrices: false  # Enable if needed
+  compression_level: 3  # 0-9, higher = more compression, slower
+
+# Paths for artifacts
+paths:
+  models: "models"
+  artifacts: "artifacts"
+  logs: "logs"
+  tests: "tests"

@@ -1,0 +1,199 @@
+# SGCC Theft Detector Configuration
+# All hyperparameters and settings for reproducible experiments
+
+# Random seed for reproducibility
+random_state: 42
+
+# Data paths
+data:
+  raw_data_path: "data/datasetsmall.csv"
+  processed_features_path: "artifacts/features.csv"
+  
+# Feature engineering
+features:
+  statistical:
+    - mean
+    - median
+    - std
+    - coef_var
+    - min
+    - max
+    - range
+    - skewness
+  
+  trend:
+    - slope_full
+    - slope_last_30d
+    - slope_last_90d
+  
+  temporal:
+    - weekday_vs_weekend_ratio
+    - peak_day_ratio
+  
+  anomaly:
+    - zero_day_count
+    - sudden_drop_count
+    - volatility_index
+  
+  other:
+    - autocorr_lag1
+    - missing_sequences_count
+
+  # Feature engineering parameters
+  sudden_drop_threshold: 0.5  # 50% drop
+  peak_day_percentile: 0.9    # top 10%
+  missing_sequence_threshold: 3  # days
+
+# Preprocessing
+preprocessing:
+  smote_enn:
+    random_state: 42
+    smote:
+      k_neighbors: 7  # Increased for more diverse synthetic samples
+      sampling_strategy: 0.8  # Target 80% minority class representation (more balanced)
+    enn:
+      n_neighbors: 5  # Increased for better noise removal
+      sampling_strategy: "all"
+  
+  scaling:
+    method: "minmax"
+    feature_range: [0, 1]
+
+# Model training
+model:
+  type: "xgboost"
+  
+  # Default XGBoost parameters
+  default_params:
+    objective: "binary:logistic"
+    eval_metric: ["auc", "logloss"]
+    use_label_encoder: false
+    random_state: 42
+    n_jobs: -1
+  
+  # Optuna hyperparameter optimization
+  optuna:
+    n_trials: 100  # Increased for better hyperparameter search
+    cv_folds: 5
+    timeout: null  # seconds, null for no timeout
+    
+    # Composite scoring weights (balanced for accuracy)
+    scoring_weights:
+      recall: 0.40  # Balanced
+      precision: 0.35  # Increased precision weight
+      f1: 0.25  # Increased F1 weight
+    
+    # Search space (optimized for better performance)
+    search_space:
+      max_depth:
+        low: 4  # Deeper trees for complex patterns
+        high: 12
+      learning_rate:
+        low: 0.005  # Lower minimum for finer tuning
+        high: 0.3
+        log: true
+      n_estimators:
+        low: 100  # More estimators
+        high: 800
+        step: 50
+      subsample:
+        low: 0.7  # Better sampling
+        high: 1.0
+      colsample_bytree:
+        low: 0.7  # More features per tree
+        high: 1.0
+      reg_alpha:
+        low: 0.0
+        high: 15.0  # Stronger L1 regularization
+      reg_lambda:
+        low: 1.0  # Minimum L2 regularization
+        high: 15.0
+      scale_pos_weight:
+        low: 1
+        high: 15  # Higher range for class imbalance
+      min_child_weight:  # NEW: prevents overfitting
+        low: 1
+        high: 7
+      gamma:  # NEW: minimum loss reduction
+        low: 0.0
+        high: 5.0
+  
+  # Quick training mode (for demos)
+  quick_train:
+    enabled: false
+    sample_fraction: 0.05
+    n_trials: 10
+    cv_folds: 3
+
+# Evaluation
+evaluation:
+  test_size: 0.2
+  stratify: true
+  
+  # Performance targets
+  targets:
+    min_recall: 0.85
+    min_precision: 0.75
+    min_f1: 0.75
+  
+  # Metrics to compute
+  metrics:
+    - recall
+    - precision
+    - f1
+    - accuracy
+    - auc
+    - gmean
+    - mcc
+  
+  # Error analysis
+  save_error_samples: true
+  max_error_samples: 100
+
+# SHAP explainability
+explainability:
+  shap:
+    tree_explainer: true
+    max_samples: 1000  # for summary plot
+    save_plots: true
+    plot_formats: ["png"]
+
+# Streamlit app
+streamlit:
+  title: "SGCC Theft Detector"
+  theme:
+    primary_color: "#00C2A8"    # Teal (action)
+    warning_color: "#FFB020"    # Amber (warning)
+    background_color: "#0E1117" # Dark charcoal
+    secondary_background: "#262730"
+    text_color: "#FAFAFA"
+  
+  cache_ttl:
+    model: null       # never expire
+    features: 3600    # 1 hour
+    weather: 3600     # 1 hour
+    geocoding: 86400  # 24 hours
+  
+  # Prediction settings
+  prediction:
+    default_threshold: 0.5
+    threshold_range: [0.1, 0.9]
+    threshold_step: 0.05
+  
+  # Map settings
+  map:
+    default_location: [-1.286389, 36.817223]  # Nairobi
+    default_zoom: 10
+
+# Paths for artifacts
+paths:
+  models: "models"
+  artifacts: "artifacts"
+  logs: "logs"
+  tests: "tests"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/sgcc_theft_detector.log"
