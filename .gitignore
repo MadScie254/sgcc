@@ -37,11 +37,6 @@ ENV/
 *.swo
 *~
 
-# Data files (keep structure, ignore actual data)
-data/*.csv
-data/*.zip
-!data/.gitkeep
-
 # Model artifacts
 models/*.joblib
 models/*.pkl
