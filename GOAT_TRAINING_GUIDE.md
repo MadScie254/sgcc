@@ -1,4 +1,4 @@
-# 🚀 GOAT-Level Model Training Guide
+# GOAT-Level Model Training Guide
 
 ## Achieving 85%+ Recall with Advanced Data Augmentation
 
@@ -10,10 +10,10 @@ python setup_goat_model.py
 ```
 
 This will:
-1. ✅ Generate 15,000 synthetic customers (10K honest + 5K theft)
-2. ✅ Create multiple dataset mixtures
-3. ✅ Run quick test (20 trials, ~10 min)
-4. ✅ Run full training (150 trials, ~2-4 hours)
+1. Generate 15,000 synthetic customers (10K honest + 5K theft)
+2. Create multiple dataset mixtures
+3. Run quick test (20 trials, ~10 min)
+4. Run full training (150 trials, ~2-4 hours)
 
 ---
 
@@ -36,11 +36,11 @@ python -m src.data_augmentation \
 - `data/data_moderate_imbalance.csv` - 20% theft
 
 **Data Generation Features:**
-- 🏠 5 customer profiles (residential low/medium/high, commercial small/large)
-- 🔧 4 theft patterns (meter tampering, bypass, reverse metering, magnetic interference)
-- 📊 Realistic seasonal variations
-- 🎲 Random theft start months (3+ months after registration)
-- 📈 20+ engineered features per customer
+- 5 customer profiles (residential low/medium/high, commercial small/large)
+- 4 theft patterns (meter tampering, bypass, reverse metering, magnetic interference)
+- Realistic seasonal variations
+- Random theft start months (3+ months after registration)
+- 20+ engineered features per customer
 
 ---
 
@@ -83,10 +83,10 @@ python train_ultra.py
 ## Expected Results
 
 ### Target Metrics
-- ✅ **Recall**: ≥ 85% (catch 85%+ of thieves)
-- ✅ **Precision**: ≥ 75% (minimize false alarms)
-- ✅ **F1 Score**: ≥ 80% (balanced performance)
-- ✅ **Accuracy**: ≥ 82% (overall correctness)
+- **Recall**: ≥ 85% (catch 85%+ of thieves)
+- **Precision**: ≥ 75% (minimize false alarms)
+- **F1 Score**: ≥ 80% (balanced performance)
+- **Accuracy**: ≥ 82% (overall correctness)
 
 ### Confusion Matrix (Target)
 ```
@@ -160,7 +160,7 @@ high_confidence = probabilities > 0.8
 ## Troubleshooting
 
 ### "Not enough values to unpack" error
-✅ **FIXED** - Confusion matrix now properly handles dict and array formats
+**FIXED** - Confusion matrix now properly handles dict and array formats
 
 ### Low recall (<85%)
 Try these adjustments in `config_ultra.yaml`:
@@ -206,11 +206,11 @@ print(f'Classes: {model.classes_}')
 
 ## Next Steps
 
-1. ✅ Generate data: `python -m src.data_augmentation`
-2. ✅ Train model: `python train_ultra.py`
-3. ✅ Launch app: `streamlit run streamlit_app/app.py`
-4. ✅ Test predictions on AI-powered page
-5. ✅ Review AI recommendations for theft/honest cases
+1. Generate data: `python -m src.data_augmentation`
+2. Train model: `python train_ultra.py`
+3. Launch app: `streamlit run streamlit_app/app.py`
+4. Test predictions on AI-powered page
+5. Review AI recommendations for theft/honest cases
 
 ---
 
@@ -246,7 +246,7 @@ Data Pipeline:
 | F1 Score | 50-65% | **80%** | 85%+ |
 | Accuracy | 70-75% | **82%** | 87%+ |
 
-**GOAT Level = All Elite metrics achieved!** 🐐
+**GOAT Level = All Elite metrics achieved!**
 
 ---
 
@@ -258,4 +258,4 @@ For issues or improvements:
 3. Adjust config parameters
 4. Generate more synthetic data
 
-**Remember:** More data + better balance + deeper trees = GOAT model! 🚀
+**Remember:** More data + better balance + deeper trees = GOAT model.

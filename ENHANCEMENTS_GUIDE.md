@@ -1,28 +1,28 @@
 # SGCC Platform Enhancements - Quick Start Guide
 
-## 🚀 What's New
+## What's New
 
 The SGCC platform has been enhanced with powerful new features across **3 major phases**:
 
-### ✅ Phase 1: Memory-Efficient Training (IMPLEMENTED)
+### Phase 1: Memory-Efficient Training (IMPLEMENTED)
 
 Train models on low-resource PCs with intelligent memory management.
 
-### ✅ Phase 3: Research Validation Dashboard (IMPLEMENTED)
+### Phase 3: Research Validation Dashboard (IMPLEMENTED)
 
 Comprehensive validation of research objectives  with advanced metrics.
 
-### ✅ Phase 5: Public API Integrations (IMPLEMENTED)
+### Phase 5: Public API Integrations (IMPLEMENTED)
 
 No-auth APIs for weather, geocoding, holidays, and more.
 
-### ✅ Phase 2: Advanced EDA Backend (IMPLEMENTED)
+### Phase 2: Advanced EDA Backend (IMPLEMENTED)
 
 Advanced analytics module ready for integration into EDA page.
 
 ---
 
-## 📥 Installation
+## Installation
 
 ### 1. Update Dependencies
 
@@ -59,7 +59,7 @@ memory:
 
 ---
 
-## 🎯 Usage Guide
+## Usage Guide
 
 ### Memory-Efficient Training
 
@@ -95,11 +95,11 @@ python -m src.memory_efficient_train --profile-memory
 
 #### Features
 
-- ✅ **Memory monitoring** - Tracks RAM usage in real-time
-- ✅ **Automatic cleanup** - Frees memory between trials
-- ✅ **Checkpoint recovery** - Resume training after crash
-- ✅ **Chunked processing** - SMOTE+ENN in 5,000-sample chunks
-- ✅ **Compressed artifacts** - Saves disk space
+- **Memory monitoring** - Tracks RAM usage in real-time
+- **Automatic cleanup** - Frees memory between trials
+- **Checkpoint recovery** - Resume training after crash
+- **Chunked processing** - SMOTE+ENN in 5,000-sample chunks
+- **Compressed artifacts** - Saves disk space
 
 #### Expected Memory Usage
 
@@ -116,7 +116,7 @@ Launch the Streamlit app:
 streamlit run streamlit_app/app.py
 ```
 
-Then navigate to: **📊 Research Validation** (page 8)
+Then navigate to: **Research Validation** (page 8)
 
 #### Features
 
@@ -254,7 +254,7 @@ test_results = perform_hypothesis_tests(features_df, labels)
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ### Run All Tests
 
@@ -278,7 +278,7 @@ Then open `htmlcov/index.html` to view coverage.
 
 ---
 
-## 📊 File Structure (New Files)
+## File Structure (New Files)
 
 ```
 sgcc/
@@ -296,7 +296,7 @@ sgcc/
 
 ---
 
-## 🎯 Next Steps
+## Next Steps
 
 ### Immediate Actions
 
@@ -329,7 +329,7 @@ sgcc/
 
 ---
 
-## 🔧 Configuration Tips
+## Configuration Tips
 
 ### Low-Memory PC (2-4 GB RAM)
 
@@ -360,7 +360,7 @@ memory:
 
 ---
 
-## ❓ Troubleshooting
+## Troubleshooting
 
 ### Issue: Memory still too high
 
@@ -388,7 +388,7 @@ pip install -r requirements.txt --upgrade
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 - **Implementation Plan**: See `brain/implementation_plan.md`
 - **Task List**: See `brain/task.md`
@@ -396,20 +396,20 @@ pip install -r requirements.txt --upgrade
 
 ---
 
-## 🎓 Research Validation
+## Research Validation
 
 The Research Validation page demonstrates:
 
-1. ✅ **High recall detection** (≥85% target)
-2. ✅ **Explainable predictions** (SHAP integration)
-3. ✅ **Model comparison** (vs baselines)
-4. ✅ **Production readiness** (deployment checklist)
+1. **High recall detection** (≥85% target)
+2. **Explainable predictions** (SHAP integration)
+3. **Model comparison** (vs baselines)
+4. **Production readiness** (deployment checklist)
 
 All aligned with your research objectives!
 
 ---
 
-## 💡 Tips
+## Tips
 
 - **Start with quick mode** to verify everything works
 - **Monitor memory usage** with `--profile-memory` flag
@@ -419,4 +419,4 @@ All aligned with your research objectives!
 
 ---
 
-**🎉 You're all set! Happy training and validating!**
+**You're all set! Happy training and validating!**
