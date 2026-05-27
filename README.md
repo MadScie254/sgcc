@@ -2,7 +2,7 @@
 
 <div align="center">
 
-⚡ **AI-Powered Electricity Theft Detection System**
+**AI-Powered Electricity Theft Detection System**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -17,7 +17,7 @@ Built with **XGBoost**, **SHAP**, **Optuna**, and **Streamlit**.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
@@ -33,7 +33,7 @@ Built with **XGBoost**, **SHAP**, **Optuna**, and **Streamlit**.
 
 ---
 
-## 🎯 Overview
+## Overview
 
 The **SGCC Theft Detector** is an end-to-end machine learning system designed to identify electricity theft by analyzing consumption patterns. The system implements:
 
@@ -45,17 +45,17 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 
 ### Key Capabilities
 
-✅ **High Recall Detection** — Optimized to catch theft (≥85% recall target)  
-✅ **Explainable Predictions** — SHAP-powered feature attribution  
-✅ **Interactive Dashboard** — Multi-page Streamlit app with EDA, training, prediction, and explanation  
-✅ **Docker Deployment** — Containerized for easy deployment  
-✅ **CI/CD Ready** — GitHub Actions workflow included  
+**High Recall Detection** — Optimized to catch theft (≥85% recall target)  
+**Explainable Predictions** — SHAP-powered feature attribution  
+**Interactive Dashboard** — Multi-page Streamlit app with EDA, training, prediction, and explanation  
+**Docker Deployment** — Containerized for easy deployment  
+**CI/CD Ready** — GitHub Actions workflow included  
 
 ---
 
-## ⚡ Features
+## Features
 
-### 🔬 Advanced ML Pipeline
+### Advanced ML Pipeline
 
 - **Feature Engineering**: Statistical, trend, temporal, and anomaly features
 - **Preprocessing**: SMOTE+ENN for balanced training, MinMaxScaler normalization
@@ -63,25 +63,25 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 - **Composite Scoring**: `0.6 × Recall + 0.25 × Precision + 0.15 × F1`
 - **Model Persistence**: Joblib serialization with versioning
 
-### 📊 Interactive Streamlit App
+### Interactive Streamlit App
 
 **4 Main Pages**:
 
-1. **📊 EDA** — Exploratory data analysis
+1. **EDA** — Exploratory data analysis
    - Class distribution & imbalance analysis
    - Feature distributions (violin plots)
    - Correlation heatmaps
    - Time-series viewer with anomaly highlights
    - Customer clustering (planned)
 
-2. **🎯 Train** — Model training interface
+2. **Train** — Model training interface
    - Quick train mode (5% data, 10 trials, ~5 min)
    - Full train mode (100% data, 60 trials, ~2-4 hours)
    - Custom configuration options
    - Real-time progress tracking
    - Training history & metrics
 
-3. **🔮 Predict** — Theft detection
+3. **Predict** — Theft detection
    - Single customer prediction (from test set)
    - Batch CSV upload
    - Manual feature input
@@ -89,13 +89,13 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
    - Risk gauge visualization
    - Top-3 SHAP reasons per prediction
 
-4. **🧠 Explain** — Model explainability
+4. **Explain** — Model explainability
    - Global SHAP summary (bar + beeswarm plots)
    - Feature importance rankings
    - Per-customer SHAP force plots
    - Interactive waterfall explanations
 
-### 🎨 Professional UI/UX
+### Professional UI/UX
 
 - **Dark theme** with teal (#00C2A8) and amber (#FFB020) accents
 - **Metric cards** with deltas and color-coded risk levels
@@ -104,7 +104,7 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 - **Customer portrait cards** with Picsum placeholder images
 - **Clean typography** and consistent spacing
 
-### 🌐 Public API Integrations
+### Public API Integrations
 
 - **Open-Meteo**: Weather context for consumption patterns
 - **Nominatim (OSM)**: Geocoding for customer location mapping
@@ -114,7 +114,7 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -170,7 +170,7 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 
@@ -233,7 +233,7 @@ scripts\download_data.bat
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Train Model
 
@@ -283,7 +283,7 @@ print(f"Theft probability: {probability:.1%}")
 
 ---
 
-## 📖 Usage
+## Usage
 
 ### Training Pipeline
 
@@ -366,7 +366,7 @@ Generates:
 
 ---
 
-## 📊 Performance
+## Performance
 
 ### Target Metrics (from Concept Note)
 
@@ -389,7 +389,7 @@ The model is **recall-optimized** to minimize false negatives (missed theft case
 
 ---
 
-## 🐳 Deployment
+## Deployment
 
 ### Docker
 
@@ -461,7 +461,7 @@ docker-compose down
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 sgcc-theft-detector/
@@ -519,7 +519,7 @@ sgcc-theft-detector/
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please follow these steps:
 
@@ -548,13 +548,13 @@ flake8 src/ --max-line-length=127
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **SGCC Dataset**: [bensalem14/sgcc-dataset](https://www.kaggle.com/datasets/bensalem14/sgcc-dataset) on Kaggle
 - **XGBoost**: Tianqi Chen and Carlos Guestrin
@@ -564,7 +564,7 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 ---
 
-## 📞 Contact
+## Contact
 
 For questions, issues, or collaboration:
 
@@ -575,8 +575,8 @@ For questions, issues, or collaboration:
 
 <div align="center">
 
-**Built with ❤️ for reliable electricity infrastructure**
+**Built with care for reliable electricity infrastructure**
 
-⚡ SGCC Theft Detector | Production Ready | Deploy Anywhere
+SGCC Theft Detector | Production Ready | Deploy Anywhere
 
 </div>
