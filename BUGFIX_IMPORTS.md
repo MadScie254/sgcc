@@ -1,4 +1,4 @@
-# 🔧 Bug Fix: Import Error Resolved
+# Bug Fix: Import Error Resolved
 
 ## Issue
 
@@ -36,7 +36,7 @@ python -m src.memory_efficient_train --quick
 
 ## Status
 
-✅ **FIXED** - Training module is now fully functional
+**FIXED** - Training module is now fully functional
 
 ---
 
