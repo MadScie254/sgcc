@@ -6,71 +6,67 @@
 # Navigate to project directory
 cd c:\Users\MadScie254\Documents\GitHub\sgcc
 
-# Launch Streamlit app
-streamlit run streamlit_app/app.py
+# Terminal 1: launch the backend API
+uvicorn backend.main:app --reload
+
+# Terminal 2: launch the frontend app
+cd frontend
+npm install
+npm run dev
 ```
 
-The platform will open at `http://localhost:8501` with all 7 modules available.
+The frontend runs at `http://localhost:5173` and talks to the backend on `http://localhost:8000`.
 
 ---
 
 ## Module Overview
 
-### 1. **Home Dashboard** (app.py)
-- Hero section with platform overview
-- System metrics cards
-- Feature showcase
-- Quick start guides
-- **Status**: VVIP UI (no emojis)
+### 1. **Home Dashboard** (`frontend/src/routes/DashboardPage.tsx`)
+- Live dataset summary from the API
+- Load trace with anomaly highlight
+- Threshold preview snapshot
+- **Status**: Scaffolded, wired to backend
 
-### 2. **Data Explorer** (pages/1_EDA.py)
-- 5 tabs: Overview, Distributions, Correlations, Time Series, Cohorts
-- Interactive Plotly visualizations
-- Customer-level analysis
-- **Status**: Professional UI
+### 2. **Data Explorer** (`frontend/src/routes/EdaPage.tsx`)
+- Dataset summary
+- Correlation matrix view
+- Customer-level time series endpoint ready
+- **Status**: API wired, visual polish next
 
-### 3. **Model Training** (pages/2_Train.py)
-- 3 modes: Quick (demo), Full (production), Custom
-- 7-step training pipeline with progress
-- Hyperparameter display
-- **Status**: Enterprise design
+### 3. **Model Training** (`frontend/src/routes/TrainPage.tsx`)
+- Quick training job starter
+- Live status polling
+- Status panel for job progress
+- **Status**: API wired, SSE next
 
-### 4. **Prediction Engine** (pages/3_Predict.py)
+### 4. **Prediction Engine** (`frontend/src/routes/PredictPage.tsx`)
 - Single customer prediction
-- Batch CSV upload
-- Manual input form
-- SHAP-based explanations
-- **Status**: Functional
+- Manual feature JSON input
+- Threshold preview
+- Top-3 SHAP reasons
+- **Status**: Wired to API
 
-### 5. **Explainability Suite** (pages/4_Explain.py)
-- Feature importance analysis
-- Global SHAP (summary, beeswarm)
-- Local explanations (per-customer)
-- Model info
-- **Status**: Professional UI
+### 5. **Explainability Suite** (`frontend/src/routes/ExplainPage.tsx`)
+- Global SHAP shell
+- Local explanation shell
+- Beeswarm/waterfall implementation next
+- **Status**: Scaffolded
 
-### 6. **Dataset Upload** (pages/5_Upload.py) NEW
-- Drag-drop CSV upload
-- Auto-analysis (4 tabs)
-- Data quality assessment
-- Training integration
-- **Status**: Ready
+### 6. **Dataset Upload** (`frontend/src/routes/UploadPage.tsx`)
+- Upload shell
+- Batch prediction flow next
+- **Status**: Scaffolded
 
-### 7. **Model Comparison** (pages/6_Compare.py) NEW
-- Baseline models: LR, RF, SVM
-- XGBoost comparison
-- ROC/PR curve overlays
-- Confusion matrices
-- Recommendations
-- **Status**: Objective 3 Complete
+### 7. **Model Comparison** (`frontend/src/routes/ComparePage.tsx`)
+- Baseline comparison endpoint
+- JSON result display
+- Charting next
+- **Status**: API wired
 
-### 8. **Performance Monitor** (pages/7_Monitor.py) NEW
-- Data drift detection (KS test, PSI)
-- Concept drift tracking
-- Alert system
-- Historical logging
-- Retraining recommendations
-- **Status**: Objective 4 Complete
+### 8. **Performance Monitor** (`frontend/src/routes/MonitorPage.tsx`)
+- Drift report shell
+- Alerts and recommendation data ready
+- **Status**: API wired
 
 ---
 
@@ -151,6 +147,18 @@ python -m src.train --quick
 ```
 - 10 trials
 - Faster for testing
+
+### Run the FastAPI backend
+```bash
+uvicorn backend.main:app --reload
+```
+
+### Run the React frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
 ---
 
@@ -321,16 +329,19 @@ ls data/datasetsmall.csv
 bash scripts/download_data.sh
 ```
 
-### Streamlit won't start
+### Frontend won't start
 ```bash
-# Check Python environment
-python --version  # Should be 3.8+
+# Check Node and Python environments
+node --version
+py --version
 
 # Reinstall dependencies
 pip install -r requirements.txt
+cd frontend
+npm install
 
 # Try with full path
-python -m streamlit run streamlit_app/app.py
+uvicorn backend.main:app --reload
 ```
 
 ---

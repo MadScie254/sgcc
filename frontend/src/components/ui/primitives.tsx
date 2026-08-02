@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { clsx } from "clsx";
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import clsx from "clsx";
 
 export function cn(...inputs: Array<string | false | null | undefined>) {
   return clsx(inputs);
@@ -9,7 +9,7 @@ export function Panel({ children, className = "" }: { children: ReactNode; class
   return <div className={cn("rounded-2xl border border-gp-border bg-gp-panel/90 shadow-[0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur", className)}>{children}</div>;
 }
 
-export function Button({ children, className = "", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+export function Button({ children, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       {...props}
@@ -23,11 +23,11 @@ export function Button({ children, className = "", ...props }: React.ButtonHTMLA
   );
 }
 
-export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={cn("w-full rounded-xl border border-gp-border bg-gp-panel-alt px-4 py-3 text-sm text-gp-text outline-none placeholder:text-gp-text-dim focus:border-gp-signal", props.className)} />;
 }
 
-export function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...props} className={cn("w-full rounded-xl border border-gp-border bg-gp-panel-alt px-4 py-3 text-sm text-gp-text outline-none placeholder:text-gp-text-dim focus:border-gp-signal", props.className)} />;
 }
 
