@@ -38,19 +38,23 @@ ENV/
 *~
 
 # Model artifacts
-models/*.joblib
-models/*.pkl
-models/*.h5
+models/**/*.joblib
+models/**/*.pkl
+models/**/*.h5
 !models/.gitkeep
 
 # Generated artifacts
-artifacts/*.json
-artifacts/*.csv
-artifacts/*.png
-artifacts/*.npy
-artifacts/*.pkl
-artifacts/*.joblib
+artifacts/**/*.json
+artifacts/**/*.csv
+artifacts/**/*.png
+artifacts/**/*.npy
+artifacts/**/*.pkl
+artifacts/**/*.joblib
 !artifacts/.gitkeep
+
+# Raw data drops
+data/*.csv
+!data/.gitkeep
 
 # OS
 .DS_Store
