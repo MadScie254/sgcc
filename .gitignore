@@ -41,6 +41,7 @@ ENV/
 models/**/*.joblib
 models/**/*.pkl
 models/**/*.h5
+!models/xgb_best.joblib
 !models/.gitkeep
 
 # Generated artifacts
@@ -50,6 +51,9 @@ artifacts/**/*.png
 artifacts/**/*.npy
 artifacts/**/*.pkl
 artifacts/**/*.joblib
+!artifacts/metrics.json
+!artifacts/feature_importance.csv
+!artifacts/test_data.pkl
 !artifacts/.gitkeep
 
 # Raw data drops

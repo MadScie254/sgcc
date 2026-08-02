@@ -2,7 +2,14 @@
 
 Electricity theft detection with a FastAPI backend and React dashboard.
 
-## Run locally
+## Prerequisites
+
+```bash
+git lfs install
+git lfs pull
+```
+
+Then install dependencies.
 
 ### Development
 
@@ -17,7 +24,7 @@ npm run dev
 In a second terminal:
 
 ```bash
-cd C:\Users\MadScie254\Documents\GitHub\sgcc
+cd ..
 .\.venv\Scripts\python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -38,6 +45,8 @@ Open `http://127.0.0.1:8000/`. The backend serves the built React app from `fron
 - Metrics and SHAP artifacts: `artifacts/`
 
 You do not need to retrain to run the app. Retrain only if you want a new model or updated metrics.
+
+The current training flow is split across `src/train.py` for the model and test split, then `src/eval.py` for metrics and feature-importance artifacts.
 
 ## Project layout
 
