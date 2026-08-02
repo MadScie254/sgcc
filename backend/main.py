@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.routers.compare import router as compare_router
+from backend.routers.eda import router as eda_router
+from backend.routers.monitor import router as monitor_router
+from backend.routers.predict import router as predict_router
+from backend.routers.train import router as train_router
+
+app = FastAPI(title="SGCC Theft Detector API", version="0.1.0")
+
+frontend_origin = os.getenv("FRONTEND_DEV_ORIGIN", "http://localhost:5173")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[frontend_origin, "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(eda_router)
+app.include_router(train_router)
+app.include_router(predict_router)
+app.include_router(compare_router)
+app.include_router(monitor_router)
+
+
+@app.get("/api/health")
+def health() -> dict:
+    return {"status": "ok", "service": "sgcc-backend"}
+
+
+frontend_dist = Path("frontend-dist")
+if hasattr(app, "frontend") and frontend_dist.exists():
+    app.frontend("/", directory=str(frontend_dist))
