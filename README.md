@@ -482,7 +482,7 @@ sgcc-theft-detector/
 ├── concept_note/                  # Project documentation
 │   └── CONCEPT NOTE FINAL ACT.pdf
 ├── data/                          # Data files (gitignored)
-│   └── data set.csv
+│   └── data_raw.csv
 ├── models/                        # Trained models (gitignored)
 │   └── xgb_best.joblib
 ├── notebooks/                     # Jupyter notebooks

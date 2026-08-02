@@ -60,7 +60,7 @@ def main(config_path='config_ultra.yaml', quick=False, lightning=False):
         logger.info("Please run data augmentation first:")
         logger.info("  python -m src.data_augmentation --n-honest 20000 --n-theft 10000")
         logger.info("\nFalling back to original dataset...")
-        config['data']['raw_data_path'] = 'data/data set.csv'
+        config['data']['raw_data_path'] = 'data/data_raw.csv'
     
     # Save modified config temporarily
     temp_config = Path('temp_ultra_config.yaml')

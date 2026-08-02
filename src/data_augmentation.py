@@ -328,7 +328,7 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(description='Generate augmented dataset')
-    parser.add_argument('--original', type=str, default='data/data set.csv',
+    parser.add_argument('--original', type=str, default='data/data_raw.csv',
                        help='Path to original dataset')
     parser.add_argument('--output', type=str, default='data/data_augmented.csv',
                        help='Path to save augmented dataset')
