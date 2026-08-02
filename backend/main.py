@@ -43,7 +43,7 @@ def health() -> dict:
     return {"status": "ok", "service": "sgcc-backend"}
 
 
-frontend_dist = Path(__file__).resolve().parents[1] / "frontend-dist"
+frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 if frontend_dist.exists():
     assets_dir = frontend_dist / "assets"
     if assets_dir.exists():

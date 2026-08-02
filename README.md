@@ -20,10 +20,14 @@ Built with **XGBoost**, **SHAP**, **Optuna**, **FastAPI**, and **React**.
 ```bash
 py -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort
-docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
 ```
 
-Open the dashboard at `http://localhost:5173` in local dev, or `http://localhost:8000` when using the backend-served Docker image.
+```bash
+npm --prefix frontend run build
+py -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Open the dashboard at `http://localhost:5173` in local dev, or `http://localhost:8000` after building the frontend for production.
 
 ---
 
@@ -58,7 +62,6 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 **High Recall Detection** — Optimized to catch theft (≥85% recall target)  
 **Explainable Predictions** — SHAP-powered feature attribution  
 **Interactive Dashboard** — Multi-route React app with EDA, training, prediction, explanation, upload, compare, and monitoring
-**Docker Deployment** — Containerized for easy deployment  
 **CI/CD Ready** — GitHub Actions workflow included  
 
 ---
