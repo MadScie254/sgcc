@@ -335,6 +335,10 @@ bash scripts/download_data.sh
 node --version
 py --version
 
+# If npm warns about an unknown python env config in Anaconda shells,
+# clear it for the session before running npm commands:
+# PowerShell: Remove-Item Env:npm_config_python
+
 # Reinstall dependencies
 pip install -r requirements.txt
 cd frontend

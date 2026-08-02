@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.routers.compare import router as compare_router
 from backend.routers.eda import router as eda_router
@@ -37,6 +39,23 @@ def health() -> dict:
     return {"status": "ok", "service": "sgcc-backend"}
 
 
-frontend_dist = Path("frontend-dist")
-if hasattr(app, "frontend") and frontend_dist.exists():
-    app.frontend("/", directory=str(frontend_dist))
+frontend_dist = Path(__file__).resolve().parents[1] / "frontend-dist"
+if frontend_dist.exists():
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/{path:path}")
+    def serve_frontend(path: str):
+        if path.startswith("api/"):
+            return {"detail": "Not Found"}
+
+        candidate = frontend_dist / path
+        if candidate.is_file():
+            return FileResponse(candidate)
+
+        index_file = frontend_dist / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+
+        return {"detail": "Frontend build not found"}

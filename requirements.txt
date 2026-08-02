@@ -19,11 +19,6 @@ seaborn>=0.12.0
 plotly>=5.17.0
 shap>=0.43.0
 
-# Streamlit and Web
-streamlit>=1.28.0
-streamlit-folium>=0.15.0
-folium>=0.15.0
-
 # Additional utilities
 pyyaml>=6.0
 requests>=2.31.0

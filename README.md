@@ -9,7 +9,7 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 Production-ready ML pipeline for detecting electricity theft using consumption patterns.  
-Built with **XGBoost**, **SHAP**, **Optuna**, and **Streamlit**.
+Built with **XGBoost**, **SHAP**, **Optuna**, **FastAPI**, and **React**.
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Documentation](#documentation) • [Deployment](#deployment)
 
@@ -41,13 +41,13 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 - **SMOTE+ENN preprocessing** for handling class imbalance
 - **Optuna-optimized XGBoost** classifier with recall-focused composite scoring
 - **SHAP explanations** for model interpretability
-- **Production-ready Streamlit app** with React-level UX
+- **Production-ready FastAPI backend** with a React/Vite frontend
 
 ### Key Capabilities
 
 **High Recall Detection** — Optimized to catch theft (≥85% recall target)  
 **Explainable Predictions** — SHAP-powered feature attribution  
-**Interactive Dashboard** — Multi-page Streamlit app with EDA, training, prediction, and explanation  
+**Interactive Dashboard** — Multi-route React app with EDA, training, prediction, explanation, upload, compare, and monitoring
 **Docker Deployment** — Containerized for easy deployment  
 **CI/CD Ready** — GitHub Actions workflow included  
 
@@ -63,7 +63,7 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 - **Composite Scoring**: `0.6 × Recall + 0.25 × Precision + 0.15 × F1`
 - **Model Persistence**: Joblib serialization with versioning
 
-### Interactive Streamlit App
+### React Frontend
 
 **4 Main Pages**:
 
@@ -161,8 +161,8 @@ The **SGCC Theft Detector** is an end-to-end machine learning system designed to
 └─────────────────────────────────────────────────────────────┘
                            ↓
 ┌─────────────────────────────────────────────────────────────┐
-│         DEPLOYMENT (streamlit_app/)                         │
-│  • Multi-page Streamlit app                                │
+│        DEPLOYMENT (backend + frontend build)                │
+│  • FastAPI serves the API and the built React SPA           │
 │  • Docker containerization                                  │
 │  • CI/CD with GitHub Actions                               │
 └─────────────────────────────────────────────────────────────┘
@@ -249,13 +249,17 @@ python -m src.train --quick
 python -m src.train
 ```
 
-### Launch Streamlit App
+### Launch the Web App
 
 ```bash
-streamlit run streamlit_app/app.py
+# Terminal 1: API
+py -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+
+# Terminal 2: React frontend
+npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-The app will open at `http://localhost:8501`.
+Open the frontend at `http://localhost:5173`.
 
 ### Make Predictions
 
@@ -332,7 +336,7 @@ Generates:
 - SHAP summary plots
 - Error analysis (FP/FN customer IDs)
 
-### Streamlit App Usage
+### Frontend Usage
 
 **Page 1: EDA**
 
@@ -424,31 +428,15 @@ docker-compose logs -f
 docker-compose down
 ```
 
-### Streamlit Cloud
+### Docker
 
-1. **Push to GitHub**:
+The Docker image builds the React frontend and serves it from the FastAPI backend on port `8000`.
 
-   ```bash
-   git add .
-   git commit -m "Deploy to Streamlit Cloud"
-   git push origin main
-   ```
+```bash
+docker compose up --build
+```
 
-2. **Configure Secrets** (`.streamlit/secrets.toml` format):
-
-   ```toml
-   KAGGLE_USERNAME = "your_username"
-   KAGGLE_KEY = "your_api_key"
-   ```
-
-3. **Deploy**:
-   - Go to [Streamlit Cloud](https://streamlit.io/cloud)
-   - Select repository
-   - Set main file: `streamlit_app/app.py`
-   - Add secrets
-   - Deploy!
-
-**Note**: Streamlit Cloud has 1GB RAM limit. Precompute heavy artifacts (model, SHAP) offline and commit them to the repo.
+Then open `http://localhost:8000`.
 
 ### Production Considerations
 
@@ -491,21 +479,14 @@ sgcc-theft-detector/
 │   ├── download_data.sh
 │   └── download_data.bat
 ├── src/                           # Source code
-│   ├── __init__.py
 │   ├── data_loader.py             # Data loading & parsing
 │   ├── features.py                # Feature engineering
 │   ├── preprocessing.py           # SMOTE+ENN preprocessing
 │   ├── modeling.py                # XGBoost + Optuna
 │   ├── train.py                   # Training pipeline
-│   ├── eval.py                    # Evaluation & SHAP
-│   └── deploy_utils.py            # Streamlit utilities
-├── streamlit_app/                 # Streamlit application
-│   ├── app.py                     # Main page
-│   └── pages/
-│       ├── 1_EDA.py               # Exploratory data analysis
-│       ├── 2_Train.py             # Model training interface
-│       ├── 3_Predict.py           # Prediction interface
-│       └── 4_Explain.py           # Explainability dashboard
+│   └── eval.py                    # Evaluation & SHAP
+├── backend/                       # FastAPI backend
+├── frontend/                      # React/Vite frontend
 ├── tests/                         # Unit tests
 │   ├── test_data_loader.py
 │   └── test_features.py
@@ -540,10 +521,10 @@ pip install black flake8 pytest pytest-cov
 pytest tests/ -v
 
 # Format code
-black src/ streamlit_app/ tests/
+black src/ backend/ tests/
 
 # Lint
-flake8 src/ --max-line-length=127
+flake8 src/ backend/ --max-line-length=127
 ```
 
 ---
@@ -560,7 +541,8 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 - **XGBoost**: Tianqi Chen and Carlos Guestrin
 - **SHAP**: Scott Lundberg et al.
 - **Optuna**: Takuya Akiba et al.
-- **Streamlit**: Streamlit Inc.
+- **FastAPI**: Sebastián Ramírez and contributors
+- **React**: Meta
 
 ---
 

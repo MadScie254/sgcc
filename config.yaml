@@ -158,33 +158,6 @@ explainability:
     save_plots: true
     plot_formats: ["png"]
 
-# Streamlit app
-streamlit:
-  title: "SGCC Theft Detector"
-  theme:
-    primary_color: "#00C2A8"    # Teal (action)
-    warning_color: "#FFB020"    # Amber (warning)
-    background_color: "#0E1117" # Dark charcoal
-    secondary_background: "#262730"
-    text_color: "#FAFAFA"
-  
-  cache_ttl:
-    model: null       # never expire
-    features: 3600    # 1 hour
-    weather: 3600     # 1 hour
-    geocoding: 86400  # 24 hours
-  
-  # Prediction settings
-  prediction:
-    default_threshold: 0.5
-    threshold_range: [0.1, 0.9]
-    threshold_step: 0.05
-  
-  # Map settings
-  map:
-    default_location: [-1.286389, 36.817223]  # Nairobi
-    default_zoom: 10
-
 # Paths for artifacts
 paths:
   models: "models"
