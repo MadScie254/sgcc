@@ -19,7 +19,7 @@ export function PredictPage() {
   const [manualValues, setManualValues] = useState<Record<string, string>>({});
 
   const configQuery = useQuery({ queryKey: ["model-config"], queryFn: getModelConfig, staleTime: 30_000 });
-  const featureGroups = useMemo(() => Object.entries(configQuery.data?.features ?? {}), [configQuery.data]);
+  const featureGroups = useMemo(() => Object.entries(configQuery.data?.feature_groups ?? {}), [configQuery.data]);
 
   useEffect(() => {
     if (!featureGroups.length || Object.keys(manualValues).length > 0) return;

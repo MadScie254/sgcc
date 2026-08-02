@@ -49,8 +49,19 @@ def risk_tier_for_probability(probability: float) -> str:
 @lru_cache(maxsize=1)
 def get_model_config() -> Dict[str, Any]:
     config = get_config()
+    feature_groups = {
+        key: value
+        for key, value in config.get("features", {}).items()
+        if isinstance(value, list)
+    }
+    feature_parameters = {
+        key: value
+        for key, value in config.get("features", {}).items()
+        if not isinstance(value, list)
+    }
     return {
-        "features": config.get("features", {}),
+        "feature_groups": feature_groups,
+        "feature_parameters": feature_parameters,
         "model": config.get("model", {}),
         "preprocessing": config.get("preprocessing", {}),
         "evaluation": config.get("evaluation", {}),
@@ -216,9 +227,11 @@ def _align_feature_row(features: Dict[str, float]) -> pd.DataFrame:
 @lru_cache(maxsize=128)
 def get_customer_feature_row(customer_id: str) -> pd.DataFrame:
     X, _ = get_feature_matrix()
-    if str(customer_id) not in X.index.astype(str):
+    index_as_str = X.index.astype(str)
+    if str(customer_id) not in index_as_str:
         raise KeyError(f"Unknown customer_id: {customer_id}")
-    row = X.loc[str(customer_id)]
+    actual_index = X.index[index_as_str == str(customer_id)][0]
+    row = X.loc[actual_index]
     if isinstance(row, pd.DataFrame):
         row = row.iloc[0]
     return pd.DataFrame([row.to_dict()], columns=get_feature_names())

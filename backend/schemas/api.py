@@ -127,7 +127,8 @@ class ModelMetricsResponse(BaseModel):
 
 
 class ModelConfigResponse(BaseModel):
-    features: Dict[str, List[str]]
+    feature_groups: Dict[str, List[str]]
+    feature_parameters: Dict[str, Any]
     model: Dict[str, Any]
     preprocessing: Dict[str, Any]
     evaluation: Dict[str, Any]

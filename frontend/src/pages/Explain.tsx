@@ -118,7 +118,21 @@ function formatValue(value: unknown): string {
   if (typeof value === "object" && value !== null) {
     return Object.entries(value as Record<string, unknown>)
       .slice(0, 3)
-      .map(([key, entry]) => `${key}: ${String(entry)}`)
+      .map(([key, entry]) => {
+        if (Array.isArray(entry)) {
+          return `${key}: ${entry.join(", ")}`;
+        }
+
+        if (typeof entry === "object" && entry !== null) {
+          const nested = Object.entries(entry as Record<string, unknown>)
+            .slice(0, 2)
+            .map(([nestedKey, nestedValue]) => `${nestedKey}=${String(nestedValue)}`)
+            .join(", ");
+          return `${key}: ${nested}`;
+        }
+
+        return `${key}: ${String(entry)}`;
+      })
       .join("; ");
   }
 
