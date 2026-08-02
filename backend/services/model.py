@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, cast
 
 import joblib
 import numpy as np
@@ -123,8 +123,8 @@ def get_top_reasons(feature_frame: pd.DataFrame, top_n: int = 3) -> List[Dict[st
 def threshold_preview(threshold: float) -> Dict[str, object]:
     model = get_trained_model()
     test_data = get_test_data()
-    X_test = pd.DataFrame(test_data["X_test"])
-    y_test = pd.Series(test_data["y_test"])
+    X_test = pd.DataFrame(cast(Any, test_data["X_test"]))
+    y_test = pd.Series(cast(Any, test_data["y_test"]))
     probabilities = np.asarray(model.predict_proba(X_test)[:, 1], dtype=float)
     predictions = np.asarray(probabilities >= threshold, dtype=int)
     metrics = {
