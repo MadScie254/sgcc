@@ -72,6 +72,28 @@ class ThresholdPreviewResponse(BaseModel):
     confusion_matrix: Dict[str, int]
 
 
+class FeatureImportanceItem(BaseModel):
+    feature: str
+    importance: float
+
+
+class GlobalShapResponse(BaseModel):
+    feature_names: List[str]
+    shap_values: List[List[float]]
+    feature_values: List[List[float]]
+    sample_count: int
+
+
+class LocalShapResponse(BaseModel):
+    customer_id: str
+    feature_names: List[str]
+    feature_values: List[float]
+    shap_values: List[float]
+    base_value: float
+    probability: float
+    top_reasons: List[PredictionReason]
+
+
 class CompareResponse(BaseModel):
     xgboost: Dict[str, Any]
     baselines: Dict[str, Any]

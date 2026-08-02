@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.routers.compare import router as compare_router
 from backend.routers.eda import router as eda_router
+from backend.routers.explain import router as explain_router
 from backend.routers.monitor import router as monitor_router
 from backend.routers.predict import router as predict_router
 from backend.routers.train import router as train_router
@@ -26,6 +27,7 @@ app.add_middleware(
 app.include_router(eda_router)
 app.include_router(train_router)
 app.include_router(predict_router)
+app.include_router(explain_router)
 app.include_router(compare_router)
 app.include_router(monitor_router)
 

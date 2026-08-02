@@ -34,6 +34,25 @@ def get_feature_names() -> List[str]:
 
 
 @lru_cache(maxsize=1)
+def get_feature_importance(limit: int = 20) -> List[Dict[str, object]]:
+    model = get_trained_model()
+    feature_names = get_feature_names()
+    importance = getattr(model, "feature_importances_", None)
+    if importance is None:
+        raise RuntimeError("Model does not expose feature_importances_")
+
+    ranking = (
+        pd.DataFrame({"feature": feature_names, "importance": importance})
+        .sort_values("importance", ascending=False)
+        .head(limit)
+    )
+    return [
+        {"feature": str(row.feature), "importance": float(cast(Any, row.importance))}
+        for row in ranking.itertuples(index=False)
+    ]
+
+
+@lru_cache(maxsize=1)
 def get_shap_explainer():
     model = get_trained_model()
     return shap.TreeExplainer(model)
@@ -118,6 +137,77 @@ def get_top_reasons(feature_frame: pd.DataFrame, top_n: int = 3) -> List[Dict[st
             "shap_value": float(values[idx]),
         })
     return reasons
+
+
+def _extract_shap_values(explainer, feature_frame: pd.DataFrame) -> tuple[float, List[float]]:
+    shap_values = explainer.shap_values(feature_frame)
+
+    if isinstance(shap_values, list):
+        shap_array = np.asarray(shap_values[1 if len(shap_values) > 1 else 0])
+    else:
+        shap_array = np.asarray(shap_values)
+
+    if shap_array.ndim == 1:
+        shap_array = shap_array.reshape(1, -1)
+
+    base_value = explainer.expected_value
+    if isinstance(base_value, (list, tuple, np.ndarray)):
+        base_value = base_value[1 if len(base_value) > 1 else 0]
+
+    return float(base_value), shap_array[0].astype(float).tolist()
+
+
+@lru_cache(maxsize=1)
+def get_global_shap_sample(sample_count: int = 200) -> Dict[str, object]:
+    model = get_trained_model()
+    X, _ = get_feature_matrix()
+    sample_frame = X.head(sample_count).copy()
+    explainer = get_shap_explainer()
+    shap_values = explainer.shap_values(sample_frame)
+
+    if isinstance(shap_values, list):
+        shap_values = shap_values[1 if len(shap_values) > 1 else 0]
+
+    shap_array = np.asarray(shap_values, dtype=float)
+    feature_values = sample_frame.astype(float).values.tolist()
+
+    return {
+        "feature_names": sample_frame.columns.tolist(),
+        "shap_values": shap_array.tolist(),
+        "feature_values": feature_values,
+        "sample_count": int(len(sample_frame)),
+    }
+
+
+@lru_cache(maxsize=128)
+def get_local_shap_details(customer_id: str) -> Dict[str, object]:
+    model = get_trained_model()
+    explainer = get_shap_explainer()
+    feature_frame = get_customer_feature_row(customer_id)
+    probability = float(model.predict_proba(feature_frame)[:, 1][0])
+    base_value, shap_values = _extract_shap_values(explainer, feature_frame)
+
+    feature_names = feature_frame.columns.tolist()
+    feature_values = feature_frame.iloc[0].astype(float).tolist()
+    top_indices = np.argsort(np.abs(np.asarray(shap_values)))[::-1][:5]
+    top_reasons = [
+        {
+            "feature": feature_names[index],
+            "value": float(feature_values[index]),
+            "shap_value": float(shap_values[index]),
+        }
+        for index in top_indices
+    ]
+
+    return {
+        "customer_id": str(customer_id),
+        "feature_names": feature_names,
+        "feature_values": feature_values,
+        "shap_values": shap_values,
+        "base_value": base_value,
+        "probability": probability,
+        "top_reasons": top_reasons,
+    }
 
 
 def threshold_preview(threshold: float) -> Dict[str, object]:
