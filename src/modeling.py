@@ -9,12 +9,17 @@ import xgboost as xgb
 import optuna
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold, cross_val_score
-from sklearn.metrics import recall_score, precision_score, f1_score, make_scorer
+from imblearn.combine import SMOTEENN
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline
+from imblearn.under_sampling import EditedNearestNeighbours
+from sklearn.metrics import recall_score, precision_score, f1_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import MinMaxScaler
 import joblib
 import logging
 from pathlib import Path
-from typing import Dict, Tuple, Optional, Callable
+from typing import Dict, Tuple, Optional, Callable, List
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -67,15 +72,101 @@ def composite_score(
     Returns:
         Weighted composite score
     """
-    recall = recall_score(y_true, y_pred, zero_division=0)
-    precision = precision_score(y_true, y_pred, zero_division=0)
-    f1 = f1_score(y_true, y_pred, zero_division=0)
+    recall = float(recall_score(y_true, y_pred, zero_division=0))
+    precision = float(precision_score(y_true, y_pred, zero_division=0))
+    f1 = float(f1_score(y_true, y_pred, zero_division=0))
     
     score = (recall_weight * recall + 
              precision_weight * precision + 
              f1_weight * f1)
     
-    return score
+    return float(score)
+
+
+def _build_smote_enn(
+    smote_enn_params: Optional[Dict] = None,
+    random_state: int = 42
+) -> SMOTEENN:
+    """Create a configured SMOTEENN resampler from config-style parameters."""
+    smote_enn_params = smote_enn_params or {}
+    smote_config = smote_enn_params.get('smote', smote_enn_params)
+    enn_config = smote_enn_params.get('enn', {})
+
+    sampling_strategy = smote_config.get(
+        'sampling_strategy',
+        smote_enn_params.get('sampling_strategy', 'auto')
+    )
+    smote_k_neighbors = smote_config.get(
+        'k_neighbors',
+        smote_enn_params.get('k_neighbors', 5)
+    )
+    enn_n_neighbors = enn_config.get(
+        'n_neighbors',
+        smote_enn_params.get('enn_n_neighbors', 3)
+    )
+
+    return SMOTEENN(
+        smote=SMOTE(
+            k_neighbors=smote_k_neighbors,
+            random_state=random_state,
+            sampling_strategy=sampling_strategy,
+        ),
+        enn=EditedNearestNeighbours(
+            n_neighbors=enn_n_neighbors,
+            sampling_strategy='all',
+        ),
+        random_state=random_state,
+    )
+
+
+def build_cv_pipeline(
+    smote_enn_params: Optional[Dict],
+    xgb_params: Dict,
+    random_state: int = 42
+) -> ImbPipeline:
+    """Build the per-fold pipeline used during Optuna cross-validation."""
+    return ImbPipeline([
+        ('scaler', MinMaxScaler()),
+        ('resample', _build_smote_enn(smote_enn_params, random_state=random_state)),
+        ('clf', xgb.XGBClassifier(**xgb_params)),
+    ])
+
+
+def evaluate_pipeline_cv(
+    pipeline_factory: Callable[[], ImbPipeline],
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv: int,
+    random_state: int,
+    recall_weight: float = 0.60,
+    precision_weight: float = 0.25,
+    f1_weight: float = 0.15
+) -> List[float]:
+    """Run per-fold evaluation for a pipeline factory and return fold scores."""
+    skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
+    scores: List[float] = []
+
+    for train_idx, val_idx in skf.split(X, y):
+        pipeline = pipeline_factory()
+
+        X_train_fold = X.iloc[train_idx]
+        X_val_fold = X.iloc[val_idx]
+        y_train_fold = y.iloc[train_idx]
+        y_val_fold = y.iloc[val_idx]
+
+        pipeline.fit(X_train_fold, y_train_fold)
+        y_pred = pipeline.predict(X_val_fold)
+
+        score = composite_score(
+            y_val_fold,
+            y_pred,
+            recall_weight,
+            precision_weight,
+            f1_weight,
+        )
+        scores.append(score)
+
+    return scores
 
 
 def train_xgb_with_optuna(
@@ -84,11 +175,12 @@ def train_xgb_with_optuna(
     n_trials: int = 60,
     cv: int = 5,
     random_state: int = 42,
+    smote_enn_params: Optional[Dict] = None,
     recall_weight: float = 0.60,
     precision_weight: float = 0.25,
     f1_weight: float = 0.15,
     timeout: Optional[int] = None
-) -> Tuple[xgb.XGBClassifier, Dict, optuna.Study]:
+) -> Tuple[Dict, optuna.Study]:
     """
     Train XGBoost with Optuna hyperparameter optimization.
     
@@ -106,13 +198,12 @@ def train_xgb_with_optuna(
         timeout: Timeout in seconds (optional)
     
     Returns:
-        Tuple of (best_model, best_params, study)
+        Tuple of (best_params, study)
     """
     logger.info(f"Starting Optuna optimization with {n_trials} trials, {cv}-fold CV...")
     logger.info(f"Composite score weights: recall={recall_weight}, precision={precision_weight}, f1={f1_weight}")
     
-    # Create stratified K-fold
-    skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
+    smote_enn_params = smote_enn_params or {}
     
     # Define objective function
     def objective(trial):
@@ -135,32 +226,25 @@ def train_xgb_with_optuna(
             'n_jobs': -1
         }
         
-        # Create model
-        model = xgb.XGBClassifier(**param)
-        
-        # Cross-validation with composite scoring
-        scores = []
-        for train_idx, val_idx in skf.split(X, y):
-            X_train_fold = X.iloc[train_idx]
-            X_val_fold = X.iloc[val_idx]
-            y_train_fold = y.iloc[train_idx]
-            y_val_fold = y.iloc[val_idx]
-            
-            # Train
-            model.fit(X_train_fold, y_train_fold, verbose=False)
-            
-            # Predict
-            y_pred = model.predict(X_val_fold)
-            
-            # Calculate composite score
-            score = composite_score(
-                y_val_fold, y_pred,
-                recall_weight, precision_weight, f1_weight
-            )
-            scores.append(score)
-        
-        # Return mean score
-        return np.mean(scores)
+        pipeline_factory = lambda: build_cv_pipeline(
+            smote_enn_params,
+            param,
+            random_state=random_state,
+        )
+
+        scores = evaluate_pipeline_cv(
+            pipeline_factory,
+            X,
+            y,
+            cv=cv,
+            random_state=random_state,
+            recall_weight=recall_weight,
+            precision_weight=precision_weight,
+            f1_weight=f1_weight,
+        )
+
+        mean_score = float(sum(scores) / len(scores))
+        return mean_score
     
     # Create study
     study = optuna.create_study(
@@ -183,8 +267,6 @@ def train_xgb_with_optuna(
     logger.info(f"Best composite score: {best_score:.4f}")
     logger.info(f"Best parameters: {best_params}")
     
-    # Train final model with best parameters
-    logger.info("Training final model with best parameters...")
     best_params.update({
         'objective': 'binary:logistic',
         'eval_metric': ['auc', 'logloss'],
@@ -193,12 +275,9 @@ def train_xgb_with_optuna(
         'n_jobs': -1
     })
     
-    best_model = xgb.XGBClassifier(**best_params)
-    best_model.fit(X, y, verbose=False)
-    
     logger.info("Training complete!")
     
-    return best_model, best_params, study
+    return best_params, study
 
 
 def save_model(
@@ -308,7 +387,7 @@ if __name__ == "__main__":
     
     # Quick optimization (5 trials for testing)
     print("\n[INFO] Running quick optimization (5 trials)...")
-    model, params, study = train_xgb_with_optuna(
+    params, study = train_xgb_with_optuna(
         X, y,
         n_trials=5,
         cv=3,
@@ -321,8 +400,10 @@ if __name__ == "__main__":
         if key not in ['objective', 'eval_metric', 'use_label_encoder', 'random_state', 'n_jobs']:
             print(f"  {key}: {value}")
     
-    # Save model
-    save_model(model)
+    # Save a quick demo model fit for the module smoke test
+    demo_model = get_xgb_model(params)
+    demo_model.fit(X, y, verbose=False)
+    save_model(demo_model)
     print(f"\n[INFO] Model saved to models/xgb_best.joblib")
     
     # Save study

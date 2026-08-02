@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from data_loader import load_raw, save_processed_features
 from features import build_features, normalize_features
 from preprocessing import apply_smote_enn, save_preprocessing_report
-from modeling import train_xgb_with_optuna, save_model, save_optuna_study
+from modeling import get_xgb_model, train_xgb_with_optuna, save_model, save_optuna_study
 
 warnings.filterwarnings('ignore')
 
@@ -136,30 +136,10 @@ def train_pipeline(
     logger.info(f"Train label distribution:\n{y_train.value_counts()}")
     logger.info(f"Test label distribution:\n{y_test.value_counts()}")
     
-    # Step 4: Apply SMOTE+ENN
-    logger.info("\n[STEP 4/7] Applying SMOTE+ENN preprocessing...")
     smote_config = config['preprocessing']['smote_enn']
-    
-    X_train_res, y_train_res, preprocess_report = apply_smote_enn(
-        X_train, y_train,
-        random_state=random_state,
-        smote_k_neighbors=smote_config['smote']['k_neighbors'],
-        enn_n_neighbors=smote_config['enn']['n_neighbors'],
-        sampling_strategy=smote_config['smote']['sampling_strategy']
-    )
-    
-    # Save preprocessing report
-    save_preprocessing_report(preprocess_report)
-    
-    # Step 5: Normalize features
-    logger.info("\n[STEP 5/7] Normalizing features...")
-    X_train_scaled, X_test_scaled = normalize_features(
-        X_train_res, X_test,
-        scaler_path="artifacts/scaler.joblib"
-    )
-    
-    # Step 6: Train model with Optuna
-    logger.info("\n[STEP 6/7] Training XGBoost with Optuna optimization...")
+
+    # Step 4: Train model with Optuna
+    logger.info("\n[STEP 4/7] Training XGBoost with Optuna optimization on the original split...")
     
     if quick_mode:
         n_trials = config['model']['quick_train']['n_trials']
@@ -170,19 +150,45 @@ def train_pipeline(
     
     scoring_weights = config['model']['optuna']['scoring_weights']
     
-    model, best_params, study = train_xgb_with_optuna(
-        X_train_scaled, y_train_res,
+    best_params, study = train_xgb_with_optuna(
+        X_train, y_train,
         n_trials=n_trials,
         cv=cv_folds,
         random_state=random_state,
+        smote_enn_params=smote_config,
         recall_weight=scoring_weights['recall'],
         precision_weight=scoring_weights['precision'],
         f1_weight=scoring_weights['f1'],
         timeout=config['model']['optuna']['timeout']
     )
     
+    # Step 5: Apply SMOTE+ENN for the final fit
+    logger.info("\n[STEP 5/7] Applying SMOTE+ENN for the final model fit...")
+    X_train_res, y_train_res, preprocess_report = apply_smote_enn(
+        X_train, y_train,
+        random_state=random_state,
+        smote_k_neighbors=smote_config['smote']['k_neighbors'],
+        enn_n_neighbors=smote_config['enn']['n_neighbors'],
+        sampling_strategy=smote_config['smote']['sampling_strategy']
+    )
+
+    # Save preprocessing report
+    save_preprocessing_report(preprocess_report)
+
+    # Step 6: Normalize features and fit the final model
+    logger.info("\n[STEP 6/7] Normalizing features and fitting the final model...")
+    X_train_scaled, X_test_scaled = normalize_features(
+        X_train_res, X_test,
+        scaler_path="artifacts/scaler.joblib"
+    )
+    assert X_test_scaled is not None
+
+    final_model = get_xgb_model(best_params)
+    final_model.fit(X_train_scaled, y_train_res, verbose=False)
+
     # Step 7: Save model and study
     logger.info("\n[STEP 7/7] Saving model and artifacts...")
+    model = final_model
     save_model(model, "models/xgb_best.joblib")
     save_optuna_study(study, "artifacts/optuna_study.pkl")
     
