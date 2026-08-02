@@ -1,15 +1,16 @@
 import type { FormEvent, ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useNavigate, NavLink } from "react-router-dom";
-import { Activity, BarChart3, LayoutDashboard, Search, Settings, Target, Users } from "lucide-react";
+import { Activity, BarChart3, FileText, LayoutDashboard, Search, Settings, Target, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { getHealth } from "@/lib/api";
 import { cn } from "@/components/ui/primitives";
 
 const navItems = [
   { to: "/", label: "Overview", icon: LayoutDashboard },
+  { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/predict", label: "Predict", icon: Target },
-  { to: "/explain", label: "Explain", icon: BarChart3 },
+  { to: "/explain", label: "Explain", icon: FileText },
   { to: "/monitor", label: "Monitor", icon: Activity },
   { to: "/customers", label: "Customers", icon: Users },
 ];
