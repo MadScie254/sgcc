@@ -9,11 +9,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.routers.compare import router as compare_router
+from backend.routers.analytics import router as analytics_router
+from backend.routers.datasets import router as datasets_router
 from backend.routers.customers import router as customers_router
 from backend.routers.eda import router as eda_router
 from backend.routers.explain import router as explain_router
 from backend.routers.model import router as model_router
 from backend.routers.monitor import router as monitor_router
+from backend.routers.reports import router as reports_router
 from backend.routers.predict import router as predict_router
 from backend.routers.train import router as train_router
 
@@ -36,6 +39,9 @@ app.include_router(model_router)
 app.include_router(explain_router)
 app.include_router(compare_router)
 app.include_router(monitor_router)
+app.include_router(analytics_router)
+app.include_router(datasets_router)
+app.include_router(reports_router)
 
 
 @app.get("/api/health")

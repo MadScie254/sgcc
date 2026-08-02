@@ -25,5 +25,7 @@ def get_project_paths() -> Dict[str, Path]:
         "models": BASE_DIR / paths.get("models", "models"),
         "artifacts": BASE_DIR / paths.get("artifacts", "artifacts"),
         "logs": BASE_DIR / paths.get("logs", "logs"),
+        "uploads": BASE_DIR / paths.get("uploads", "data/uploads"),
+        "reports": BASE_DIR / paths.get("reports", "artifacts/reports"),
         "data": BASE_DIR / "data",
     }

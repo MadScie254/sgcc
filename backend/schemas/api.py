@@ -147,6 +147,55 @@ class MonitorResponse(BaseModel):
     recommendations: List[str] = Field(default_factory=list)
 
 
+class DatasetCatalogItem(BaseModel):
+    dataset_id: str
+    original_filename: str
+    stored_filename: str
+    stored_path: str
+    uploaded_at: str
+    rows: int
+    columns: int
+    status: str
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    top_risk_rows: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class DatasetCatalogResponse(BaseModel):
+    items: List[DatasetCatalogItem]
+
+
+class DatasetUploadResponse(BaseModel):
+    item: DatasetCatalogItem
+
+
+class ReportRequest(BaseModel):
+    dataset_id: Optional[str] = None
+    country_code: str = Field(default="DZ", min_length=2, max_length=2)
+    latitude: float = 36.7538
+    longitude: float = 3.0588
+
+
+class ReportResponse(BaseModel):
+    report_id: str
+    dataset_id: Optional[str] = None
+    dataset_label: str
+    generated_at: str
+    model_metrics: Dict[str, Any]
+    dataset_summary: Dict[str, Any]
+    top_risk_rows: List[Dict[str, Any]] = Field(default_factory=list)
+    context: Dict[str, Any] = Field(default_factory=dict)
+    pdf_path: str
+    download_url: str
+
+
+class AnalyticsDashboardResponse(BaseModel):
+    dataset_summary: DatasetSummary
+    model_metrics: ModelMetricsResponse
+    uploads: List[DatasetCatalogItem]
+    reports: List[Dict[str, Any]]
+    context: Dict[str, Any]
+
+
 class TrainingJobCreateRequest(BaseModel):
     mode: str = Field(default="quick", pattern="^(quick|full|custom)$")
     config_overrides: Optional[Dict[str, Any]] = None
