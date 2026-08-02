@@ -37,6 +37,14 @@ cd ..
 .\.venv\Scripts\python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
+Or use Docker:
+
+```bash
+docker compose up --build
+```
+
+Set `API_KEY` in `.env` first when using Docker.
+
 Open `http://127.0.0.1:8000/`. The backend serves the built React app from `frontend/dist`.
 
 ## Already trained

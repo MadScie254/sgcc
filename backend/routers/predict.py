@@ -25,7 +25,10 @@ router = APIRouter(prefix="/api/predict", tags=["predict"])
 @router.post("/single", response_model=SinglePredictionResponse)
 def predict_single(request: SinglePredictionRequest) -> SinglePredictionResponse:
     if request.customer_id:
-        payload = predict_for_customer(request.customer_id, threshold=request.threshold)
+        try:
+            payload = predict_for_customer(request.customer_id, threshold=request.threshold)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SinglePredictionResponse(**payload)
 
     if request.features:
