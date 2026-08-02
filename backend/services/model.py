@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 from pathlib import Path
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, cast
 
 import joblib
 import numpy as np
@@ -15,6 +16,10 @@ from src.modeling import load_model
 
 from .config import get_config, get_project_paths
 from .data import get_customer_timeseries, get_feature_matrix
+
+
+HIGH_RISK_THRESHOLD = 0.7
+MEDIUM_RISK_THRESHOLD = 0.4
 
 
 @lru_cache(maxsize=1)
@@ -31,6 +36,142 @@ def get_trained_model():
 def get_feature_names() -> List[str]:
     X, _ = get_feature_matrix()
     return X.columns.tolist()
+
+
+def risk_tier_for_probability(probability: float) -> str:
+    if probability >= HIGH_RISK_THRESHOLD:
+        return "high"
+    if probability >= MEDIUM_RISK_THRESHOLD:
+        return "medium"
+    return "low"
+
+
+@lru_cache(maxsize=1)
+def get_model_config() -> Dict[str, Any]:
+    config = get_config()
+    return {
+        "features": config.get("features", {}),
+        "model": config.get("model", {}),
+        "preprocessing": config.get("preprocessing", {}),
+        "evaluation": config.get("evaluation", {}),
+    }
+
+
+@lru_cache(maxsize=1)
+def get_model_metrics() -> Dict[str, Any]:
+    metrics_path = get_project_paths()["artifacts"] / "metrics.json"
+    metrics: Dict[str, Any] = {}
+    if metrics_path.exists():
+        with open(metrics_path, "r", encoding="utf-8") as handle:
+            metrics = cast(Dict[str, Any], json.load(handle))
+
+    X, y = get_feature_matrix()
+    model = get_trained_model()
+    probabilities = np.asarray(model.predict_proba(X)[:, 1], dtype=float)
+    threshold = float(metrics.get("threshold", 0.5))
+    predictions = np.asarray(probabilities >= threshold, dtype=int)
+    confusion = confusion_matrix(y, predictions)
+    support = metrics.get("support") or {
+        "class_0": int((y == 0).sum()),
+        "class_1": int((y == 1).sum()),
+    }
+    total_support = max(int(support.get("class_0", 0)) + int(support.get("class_1", 0)), 1)
+
+    return {
+        "threshold": threshold,
+        "metrics": {
+            "recall": float(metrics.get("recall", 0.0)),
+            "precision": float(metrics.get("precision", 0.0)),
+            "f1": float(metrics.get("f1", 0.0)),
+            "accuracy": float(metrics.get("accuracy", 0.0)),
+            "auc": float(metrics.get("auc", 0.0)),
+            "gmean": float(metrics.get("gmean", 0.0)),
+            "mcc": float(metrics.get("mcc", 0.0)),
+        },
+        "support": {
+            "class_0": int(support.get("class_0", 0)),
+            "class_1": int(support.get("class_1", 0)),
+        },
+        "confusion_matrix": {
+            "tn": int(confusion[0, 0]),
+            "fp": int(confusion[0, 1]),
+            "fn": int(confusion[1, 0]),
+            "tp": int(confusion[1, 1]),
+        },
+        "customers_monitored": int(len(X)),
+        "flagged_today": int(predictions.sum()),
+        "current_mean_probability": float(probabilities.mean()) if len(probabilities) else 0.0,
+        "base_rate": float(int(support.get("class_1", 0)) / total_support),
+        "risk_tier_distribution": {
+            "high": int((probabilities >= HIGH_RISK_THRESHOLD).sum()),
+            "medium": int(((probabilities >= MEDIUM_RISK_THRESHOLD) & (probabilities < HIGH_RISK_THRESHOLD)).sum()),
+            "low": int((probabilities < MEDIUM_RISK_THRESHOLD).sum()),
+        },
+    }
+
+
+@lru_cache(maxsize=1)
+def get_customer_rankings() -> List[Dict[str, Any]]:
+    X, _ = get_feature_matrix()
+    model = get_trained_model()
+    probabilities = np.asarray(model.predict_proba(X)[:, 1], dtype=float)
+    frame = pd.DataFrame(
+        {
+            "customer_id": X.index.astype(str),
+            "risk_score": probabilities,
+        }
+    )
+    frame["threshold"] = get_model_metrics()["threshold"]
+    frame["predicted_label"] = (frame["risk_score"] >= frame["threshold"]).astype(int)
+    frame["risk_tier"] = frame["risk_score"].apply(risk_tier_for_probability)
+    frame["rank"] = frame["risk_score"].rank(method="first", ascending=False).astype(int)
+    return frame.sort_values("risk_score", ascending=False).to_dict(orient="records")
+
+
+def get_customer_table(
+    search: Optional[str] = None,
+    risk_tier: Optional[str] = None,
+    sort_by: str = "risk_score",
+    sort_dir: str = "desc",
+    page: int = 1,
+    page_size: int = 20,
+) -> Dict[str, Any]:
+    rankings = pd.DataFrame(get_customer_rankings())
+    if search:
+        rankings = rankings[rankings["customer_id"].str.contains(str(search), case=False, na=False)]
+    if risk_tier:
+        rankings = rankings[rankings["risk_tier"] == risk_tier]
+
+    if sort_by not in rankings.columns:
+        sort_by = "risk_score"
+
+    ascending = sort_dir == "asc"
+    rankings = rankings.sort_values(sort_by, ascending=ascending, kind="mergesort")
+    rankings = rankings.reset_index(drop=True)
+    rankings["rank"] = rankings.index + 1
+    total = int(len(rankings))
+    start = max((page - 1) * page_size, 0)
+    end = start + page_size
+    items = rankings.iloc[start:end].to_dict(orient="records")
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "search": search,
+        "sort_by": sort_by,
+        "sort_dir": sort_dir,
+        "risk_tier": risk_tier,
+    }
+
+
+def get_feature_importance_from_csv(limit: int = 15) -> List[Dict[str, Any]]:
+    csv_path = get_project_paths()["artifacts"] / "feature_importance.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Feature importance file not found: {csv_path}")
+
+    ranking = pd.read_csv(csv_path).sort_values("importance", ascending=False).head(limit)
+    return ranking.to_dict(orient="records")
 
 
 @lru_cache(maxsize=1)

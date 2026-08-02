@@ -15,6 +15,16 @@ Built with **XGBoost**, **SHAP**, **Optuna**, **FastAPI**, and **React**.
 
 </div>
 
+## Running the React Dashboard
+
+```bash
+py -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort
+docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
+```
+
+Open the dashboard at `http://localhost:5173` in local dev, or `http://localhost:8000` when using the backend-served Docker image.
+
 ---
 
 ## Table of Contents

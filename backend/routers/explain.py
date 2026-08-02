@@ -3,14 +3,17 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.schemas.api import FeatureImportanceItem, GlobalShapResponse, LocalShapResponse
-from backend.services.model import get_customer_feature_row, get_feature_importance, get_global_shap_sample, get_local_shap_details
+from backend.services.model import get_feature_importance_from_csv, get_global_shap_sample, get_local_shap_details
 
 router = APIRouter(prefix="/api/explain", tags=["explain"])
 
 
 @router.get("/feature-importance", response_model=list[FeatureImportanceItem])
 def feature_importance(limit: int = Query(default=20, ge=1, le=100)) -> list[FeatureImportanceItem]:
-    return [FeatureImportanceItem(**item) for item in get_feature_importance(limit=limit)]
+    try:
+        return [FeatureImportanceItem(**item) for item in get_feature_importance_from_csv(limit=limit)]
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/global-shap", response_model=GlobalShapResponse)

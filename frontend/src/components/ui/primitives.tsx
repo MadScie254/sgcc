@@ -6,7 +6,7 @@ export function cn(...inputs: Array<string | false | null | undefined>) {
 }
 
 export function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={cn("rounded-2xl border border-gp-border bg-gp-panel/90 shadow-[0_18px_48px_rgba(0,0,0,0.35)] backdrop-blur", className)}>{children}</div>;
+  return <div className={cn("rounded-lg border border-border bg-surface", className)}>{children}</div>;
 }
 
 export function Button({ children, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -14,7 +14,7 @@ export function Button({ children, className = "", ...props }: ButtonHTMLAttribu
     <button
       {...props}
       className={cn(
-        "inline-flex items-center justify-center rounded-xl border border-gp-border bg-gp-panel-alt px-4 py-2 text-sm font-semibold text-gp-text transition hover:border-gp-signal hover:bg-gp-signal-dim disabled:cursor-not-allowed disabled:opacity-60",
+        "inline-flex items-center justify-center rounded-md border border-border bg-surface px-4 py-2 text-sm font-semibold text-primary transition hover:border-accent hover:bg-accent-bg disabled:cursor-not-allowed disabled:opacity-60",
         className,
       )}
     >
@@ -24,18 +24,18 @@ export function Button({ children, className = "", ...props }: ButtonHTMLAttribu
 }
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={cn("w-full rounded-xl border border-gp-border bg-gp-panel-alt px-4 py-3 text-sm text-gp-text outline-none placeholder:text-gp-text-dim focus:border-gp-signal", props.className)} />;
+  return <input {...props} className={cn("w-full rounded-md border border-border bg-surface px-4 py-3 text-sm text-primary outline-none placeholder:text-muted focus:ring-1 focus:ring-accent", props.className)} />;
 }
 
 export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...props} className={cn("w-full rounded-xl border border-gp-border bg-gp-panel-alt px-4 py-3 text-sm text-gp-text outline-none placeholder:text-gp-text-dim focus:border-gp-signal", props.className)} />;
+  return <textarea {...props} className={cn("w-full rounded-md border border-border bg-surface px-4 py-3 text-sm text-primary outline-none placeholder:text-muted focus:ring-1 focus:ring-accent", props.className)} />;
 }
 
 export function Badge({ children, tone = "signal" }: { children: ReactNode; tone?: "signal" | "alert" | "muted" }) {
   const toneClasses = {
-    signal: "bg-gp-signal-dim text-gp-signal border-gp-signal/40",
-    alert: "bg-gp-alert-dim text-gp-alert border-gp-alert/40",
-    muted: "bg-gp-panel-alt text-gp-text-muted border-gp-border",
+    signal: "bg-success-bg text-success border-success/30",
+    alert: "bg-danger-bg text-danger border-danger/30",
+    muted: "bg-surface-alt text-secondary border-border",
   };
   return <span className={cn("inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]", toneClasses[tone])}>{children}</span>;
 }

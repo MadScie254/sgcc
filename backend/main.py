@@ -9,8 +9,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.routers.compare import router as compare_router
+from backend.routers.customers import router as customers_router
 from backend.routers.eda import router as eda_router
 from backend.routers.explain import router as explain_router
+from backend.routers.model import router as model_router
 from backend.routers.monitor import router as monitor_router
 from backend.routers.predict import router as predict_router
 from backend.routers.train import router as train_router
@@ -29,6 +31,8 @@ app.add_middleware(
 app.include_router(eda_router)
 app.include_router(train_router)
 app.include_router(predict_router)
+app.include_router(customers_router)
+app.include_router(model_router)
 app.include_router(explain_router)
 app.include_router(compare_router)
 app.include_router(monitor_router)

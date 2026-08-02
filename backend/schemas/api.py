@@ -94,6 +94,45 @@ class LocalShapResponse(BaseModel):
     top_reasons: List[PredictionReason]
 
 
+class CustomerSummaryItem(BaseModel):
+    customer_id: str
+    risk_score: float
+    risk_tier: str
+    predicted_label: int
+    threshold: float
+    rank: int
+
+
+class CustomersResponse(BaseModel):
+    items: List[CustomerSummaryItem]
+    total: int
+    page: int
+    page_size: int
+    search: Optional[str] = None
+    sort_by: str
+    sort_dir: str
+    risk_tier: Optional[str] = None
+
+
+class ModelMetricsResponse(BaseModel):
+    threshold: float
+    metrics: Dict[str, float]
+    support: Dict[str, int]
+    confusion_matrix: Dict[str, int]
+    customers_monitored: int
+    flagged_today: int
+    current_mean_probability: float
+    base_rate: float
+    risk_tier_distribution: Dict[str, int]
+
+
+class ModelConfigResponse(BaseModel):
+    features: Dict[str, List[str]]
+    model: Dict[str, Any]
+    preprocessing: Dict[str, Any]
+    evaluation: Dict[str, Any]
+
+
 class CompareResponse(BaseModel):
     xgboost: Dict[str, Any]
     baselines: Dict[str, Any]
