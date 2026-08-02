@@ -175,11 +175,17 @@ def load_processed_features(path: str = "artifacts/features.csv") -> Tuple[pd.Da
     logger.info(f"Loading processed features from {path}...")
     
     df = pd.read_csv(path, index_col=None)
+
+    if len(df.columns) > 0:
+        first_column = df.columns[0]
+        if first_column.startswith("Unnamed") or first_column in {"customer_id", "index"}:
+            df = df.set_index(first_column)
+            df.index.name = None
     
     if 'label' not in df.columns:
         raise ValueError("Features file must contain 'label' column")
     
-    y = df['label']
+    y = df['label'].astype('int32')
     X = df.drop('label', axis=1)
     
     logger.info(f"Loaded features shape: {X.shape}")
@@ -207,13 +213,10 @@ def save_processed_features(
     # Combine features and labels
     df = X.copy()
     
-    # Reset indices to avoid duplicate index errors
-    df = df.reset_index(drop=True)
-    y_reset = y.reset_index(drop=True)
-    
-    df['label'] = y_reset
-    
-    df.to_csv(path, index=False)
+    # Preserve the feature index so round-trips keep customer identifiers when present.
+    df['label'] = y
+
+    df.to_csv(path, index=True)
     logger.info(f"Saved features to {path}")
 
 
