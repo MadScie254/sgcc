@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme {
+  --color-gp-bg: #081018;
+  --color-gp-panel: #0f1722;
+  --color-gp-panel-alt: #152131;
+  --color-gp-border: #233246;
+  --color-gp-signal: #29d39b;
+  --color-gp-signal-dim: #0e231c;
+  --color-gp-alert: #ff7354;
+  --color-gp-alert-dim: #2c1a16;
+  --color-gp-text: #ebf0f6;
+  --color-gp-text-muted: #8a98a8;
+  --color-gp-text-dim: #536274;
+
+  --font-display: "Space Grotesk", "Segoe UI", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", "Consolas", monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: var(--color-gp-text);
+  background:
+    radial-gradient(circle at top left, rgba(41, 211, 155, 0.16), transparent 35%),
+    radial-gradient(circle at top right, rgba(255, 115, 84, 0.11), transparent 28%),
+    linear-gradient(180deg, #071019 0%, #05080d 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+* {
+  box-sizing: border-box;
+}
