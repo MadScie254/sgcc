@@ -6,7 +6,7 @@ from fastapi import Header, HTTPException, Request, status
 
 
 def load_api_key() -> str | None:
-    env_name = os.getenv("ENV", "production").lower()
+    env_name = os.getenv("ENV", "development").lower()
     api_key = os.getenv("API_KEY")
 
     if env_name != "development" and not api_key:

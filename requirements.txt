@@ -12,6 +12,7 @@ fastapi>=0.138.0
 uvicorn[standard]>=0.30.0
 arq>=0.26.0
 redis>=5.0.0
+python-multipart>=0.0.9
 
 # Visualization
 matplotlib>=3.7.0
