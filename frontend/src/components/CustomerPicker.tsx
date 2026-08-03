@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { ChevronDown, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { listCustomers } from "@/lib/api";
@@ -6,6 +6,7 @@ import { cn } from "@/components/ui/primitives";
 
 type CustomerPickerProps = {
   selectedCustomerId: string | null;
+  // eslint-disable-next-line no-unused-vars
   onSelect: (customerId: string) => void;
   placeholder?: string;
 };
@@ -18,8 +19,6 @@ export function CustomerPicker({ selectedCustomerId, onSelect, placeholder = "Se
     queryFn: () => listCustomers({ search, page_size: 8, sort_by: "risk_score", sort_dir: "desc" }),
     enabled: search.trim().length >= 2,
   });
-
-  const selectedLabel = useMemo(() => selectedCustomerId ?? "", [selectedCustomerId]);
 
   return (
     <div className="space-y-2">
@@ -45,7 +44,7 @@ export function CustomerPicker({ selectedCustomerId, onSelect, placeholder = "Se
               onClick={() => onSelect(item.customer_id)}
               className={cn(
                 "flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition hover:bg-surface-alt",
-                selectedLabel === item.customer_id && "bg-accent-bg text-accent",
+                selectedCustomerId === item.customer_id && "bg-accent-bg text-accent",
               )}
             >
               <span className="font-mono text-xs">{item.customer_id}</span>

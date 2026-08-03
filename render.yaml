@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: sgcc-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt && git lfs pull && cd frontend && npm ci && npm run build && cd ..
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ENV
+        value: production
+      - key: API_KEY
+        generateValue: true
+      - key: FRONTEND_DEV_ORIGIN
+        value: https://<your-render-url>.onrender.com

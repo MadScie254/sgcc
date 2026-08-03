@@ -45,6 +45,17 @@ docker compose up --build
 
 Set `API_KEY` in `.env` first when using Docker.
 
+## Deploy
+
+This repo supports a Docker-free Render deployment path.
+
+1. Push to `main`.
+2. Connect the repository in Render once.
+3. Render reads [render.yaml](render.yaml), installs Python and frontend dependencies, builds `frontend/dist`, and starts the FastAPI app directly.
+4. After the first connection, every push to `main` redeploys automatically.
+
+If you use a Render preview or production URL, set `FRONTEND_DEV_ORIGIN` to the deployed frontend origin so browser requests are allowed by CORS.
+
 Open `http://127.0.0.1:8000/`. The backend serves the built React app from `frontend/dist`.
 
 ## Already trained
