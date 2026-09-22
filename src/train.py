@@ -30,11 +30,14 @@ from preprocessing import save_preprocessing_report
 from modeling import (
     train_xgb_with_optuna,
     fit_final_pipeline,
+    out_of_fold_probabilities,
+    threshold_for_budget,
     get_classifier,
     save_model,
     save_optuna_study,
 )
-from eval import evaluate_model, save_metrics, save_feature_importance
+from eval import evaluate_model, ranking_metrics, save_metrics, save_feature_importance
+from sklearn.metrics import average_precision_score
 
 warnings.filterwarnings('ignore')
 
@@ -120,15 +123,21 @@ def _library_versions() -> Dict[str, str]:
     }
 
 
-def _resampling_report(pipeline, X_train: pd.DataFrame, y_train: pd.Series, smote_config: dict) -> dict:
+def _resampling_report(
+    pipeline, X_train: pd.DataFrame, y_train: pd.Series, smote_config: dict, resampling: str
+) -> dict:
     """Recreate the pipeline's fit-time resampling to report class counts."""
-    scaled = pipeline.named_steps['scaler'].transform(X_train)
-    resampler = clone(pipeline.named_steps['resample'])
-    _, y_resampled = resampler.fit_resample(scaled, y_train)
+    step = pipeline.named_steps['resample']
+    if step == 'passthrough':
+        y_resampled = y_train.to_numpy()
+    else:
+        scaled = pipeline.named_steps['scaler'].transform(X_train)
+        _, y_resampled = clone(step).fit_resample(scaled, y_train)
     original = y_train.value_counts().sort_index()
     resampled = pd.Series(y_resampled).value_counts().sort_index()
     return {
-        'method': 'SMOTE+ENN (after MinMax scaling, inside the model pipeline)',
+        'method': f'{resampling} (after MinMax scaling, inside the model pipeline)',
+        'resampling': resampling,
         'original_distribution': {str(k): int(v) for k, v in original.items()},
         'resampled_distribution': {str(k): int(v) for k, v in resampled.items()},
         'original_total': int(len(y_train)),
@@ -137,6 +146,59 @@ def _resampling_report(pipeline, X_train: pd.DataFrame, y_train: pd.Series, smot
         'smote_k_neighbors': smote_config['smote']['k_neighbors'],
         'enn_n_neighbors': smote_config['enn']['n_neighbors'],
         'sampling_strategy': smote_config['smote']['sampling_strategy'],
+    }
+
+
+def _select_operating_point(
+    config: dict,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    best_params: dict,
+    smote_config: dict,
+    cv_folds: int,
+    random_state: int,
+    resampling: str
+) -> dict:
+    """
+    Decision threshold and risk-tier cutoffs, chosen without the test split.
+
+    method "inspection_budget" flags the top budget_fraction of customers by
+    out-of-fold score on the training split; "medium" covers the next band up
+    to medium_budget_fraction. method "fixed" uses the configured threshold.
+    """
+    evaluation = config['evaluation']
+    settings = evaluation.get('operating_point', {'method': 'fixed', 'threshold': evaluation.get('threshold', 0.5)})
+    method = settings.get('method', 'fixed')
+
+    if method == 'fixed':
+        threshold = float(settings.get('threshold', 0.5))
+        return {
+            'method': 'fixed',
+            'threshold': threshold,
+            'medium_threshold': float(settings.get('medium_threshold', 0.4)),
+        }
+    if method != 'inspection_budget':
+        raise ValueError(f"Unknown operating_point.method {method!r}")
+
+    budget = float(settings['budget_fraction'])
+    medium_budget = float(settings.get('medium_budget_fraction', min(3 * budget, 1.0)))
+    logger.info(f"Choosing threshold for a {budget:.0%} inspection budget from {cv_folds}-fold out-of-fold scores...")
+    oof = out_of_fold_probabilities(
+        X_train, y_train, best_params, smote_config,
+        cv=cv_folds, random_state=random_state, resampling=resampling
+    )
+    threshold = threshold_for_budget(oof, budget)
+    medium_threshold = threshold_for_budget(oof, medium_budget)
+    logger.info(f"Threshold {threshold:.4f} (high), {medium_threshold:.4f} (medium)")
+    return {
+        'method': 'inspection_budget',
+        'budget_fraction': budget,
+        'medium_budget_fraction': medium_budget,
+        'threshold': threshold,
+        'medium_threshold': medium_threshold,
+        'selected_on': f'{cv_folds}-fold out-of-fold scores on the training split',
+        'oof_average_precision': float(average_precision_score(y_train, oof)),
+        'oof_flag_rate': float((oof >= threshold).mean()),
     }
 
 
@@ -222,8 +284,11 @@ def train_pipeline(
     logger.info(f"Test label distribution:\n{y_test.value_counts()}")
 
     smote_config = config['preprocessing']['smote_enn']
+    resampling = config['preprocessing'].get('resampling', 'smote_enn')
+    scoring = config['model']['optuna'].get('scoring', 'composite')
+    logger.info(f"Resampling: {resampling}; Optuna scoring: {scoring}")
 
-    # Step 4: Tune hyperparameters with Optuna (scaler -> SMOTE+ENN -> XGBoost per fold)
+    # Step 4: Tune hyperparameters with Optuna (scaler -> resample -> XGBoost per fold)
     logger.info("\n[STEP 4/7] Tuning XGBoost with Optuna on the training split...")
 
     if quick_mode:
@@ -244,24 +309,36 @@ def train_pipeline(
         recall_weight=scoring_weights['recall'],
         precision_weight=scoring_weights['precision'],
         f1_weight=scoring_weights['f1'],
-        timeout=config['model']['optuna']['timeout']
+        timeout=config['model']['optuna']['timeout'],
+        scoring=scoring,
+        resampling=resampling
     )
 
     # Step 5: Fit the final model as the same pipeline that was cross-validated
-    logger.info("\n[STEP 5/7] Fitting the final scaler -> SMOTE+ENN -> XGBoost pipeline...")
+    logger.info(f"\n[STEP 5/7] Fitting the final scaler -> {resampling} -> XGBoost pipeline...")
     model = fit_final_pipeline(
         X_train, y_train,
         xgb_params=best_params,
         smote_enn_params=smote_config,
-        random_state=random_state
+        random_state=random_state,
+        resampling=resampling
     )
-    preprocess_report = _resampling_report(model, X_train, y_train, smote_config)
+    preprocess_report = _resampling_report(model, X_train, y_train, smote_config, resampling)
     save_preprocessing_report(preprocess_report, str(output_paths['preprocess_report']))
+
+    # Choose the operating threshold on the training split only
+    operating_point = _select_operating_point(
+        config, X_train, y_train, best_params, smote_config, cv_folds, random_state, resampling
+    )
+    threshold = operating_point['threshold']
 
     # Step 6: Evaluate the fitted pipeline on the untouched test split
     logger.info("\n[STEP 6/7] Evaluating on the held-out test split...")
-    threshold = float(config['evaluation'].get('threshold', 0.5))
     metrics = evaluate_model(model, X_test, y_test, threshold=threshold)
+    test_scores = model.predict_proba(X_test)[:, 1]
+    operating_point['test_flag_rate'] = float((test_scores >= threshold).mean())
+    metrics['operating_point'] = operating_point
+    metrics['ranking'] = ranking_metrics(y_test, test_scores)
 
     git_commit = _git_commit()
     metrics.update({
@@ -287,9 +364,11 @@ def train_pipeline(
         'optuna': {
             'n_trials': int(n_trials),
             'cv_folds': int(cv_folds),
-            'best_cv_composite_score': float(study.best_value),
-            'scoring_weights': scoring_weights,
+            'scoring': scoring,
+            'best_cv_score': float(study.best_value),
+            'scoring_weights': scoring_weights if scoring == 'composite' else None,
         },
+        'resampling': resampling,
         'libraries': _library_versions(),
     })
 
@@ -329,10 +408,11 @@ def train_pipeline(
     logger.info("TRAINING COMPLETE")
     logger.info("="*80)
     logger.info(f"Model version: {metrics['model_version']}")
-    logger.info(f"Best CV composite score: {results['best_score']:.4f}")
+    logger.info(f"Best CV {scoring} score: {results['best_score']:.4f}")
     logger.info(
-        f"Test (threshold {threshold}): recall={metrics['recall']:.4f} "
-        f"precision={metrics['precision']:.4f} f1={metrics['f1']:.4f} auc={metrics['auc']:.4f}"
+        f"Test (threshold {threshold:.4f}, flags {operating_point['test_flag_rate']:.1%}): "
+        f"recall={metrics['recall']:.4f} precision={metrics['precision']:.4f} "
+        f"f1={metrics['f1']:.4f} auc={metrics['auc']:.4f} pr_auc={metrics['average_precision']:.4f}"
     )
     logger.info(f"Model saved to: {output_paths['model']}")
     logger.info("="*80)

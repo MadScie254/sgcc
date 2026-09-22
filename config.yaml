@@ -46,6 +46,8 @@ features:
 
 # Preprocessing
 preprocessing:
+  # Resampling step inside the model pipeline: smote_enn | smote | none
+  resampling: smote_enn
   smote_enn:
     random_state: 42
     smote:
@@ -76,6 +78,11 @@ model:
     n_trials: 100  # Increased for better hyperparameter search
     cv_folds: 5
     timeout: null  # seconds, null for no timeout
+
+    # What Optuna maximises across CV folds:
+    #   average_precision - PR-AUC of the predicted probabilities (threshold-free)
+    #   composite         - scoring_weights applied to recall/precision/F1 at 0.5
+    scoring: average_precision
     
     # Composite scoring weights (balanced for accuracy)
     scoring_weights:
@@ -129,6 +136,15 @@ model:
 evaluation:
   test_size: 0.2
   stratify: true
+
+  # Decision threshold, chosen on out-of-fold scores of the training split
+  # (never the test split). inspection_budget flags the top budget_fraction
+  # of customers ("high" risk); medium_budget_fraction sets the "medium" band.
+  # Use method: fixed with threshold: <p> for a hand-set cutoff.
+  operating_point:
+    method: inspection_budget
+    budget_fraction: 0.05
+    medium_budget_fraction: 0.15
   
   # Performance targets
   targets:

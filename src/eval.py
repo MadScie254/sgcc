@@ -16,7 +16,7 @@ import seaborn as sns
 import shap
 from sklearn.metrics import (
     recall_score, precision_score, f1_score, accuracy_score,
-    roc_auc_score, confusion_matrix, classification_report,
+    roc_auc_score, average_precision_score, confusion_matrix, classification_report,
     matthews_corrcoef, roc_curve, precision_recall_curve
 )
 from imblearn.metrics import geometric_mean_score
@@ -59,6 +59,7 @@ def evaluate_model(
         'f1': float(f1_score(y_test, y_pred, zero_division=0)),
         'accuracy': float(accuracy_score(y_test, y_pred)),
         'auc': float(roc_auc_score(y_test, y_pred_proba)),
+        'average_precision': float(average_precision_score(y_test, y_pred_proba)),
         'gmean': float(geometric_mean_score(y_test, y_pred)),
         'mcc': float(matthews_corrcoef(y_test, y_pred))
     }
@@ -91,6 +92,35 @@ def evaluate_model(
     logger.info(f"MCC: {metrics['mcc']:.4f}")
     
     return metrics
+
+
+def ranking_metrics(
+    y_true,
+    y_score,
+    fractions: Tuple[float, ...] = (0.01, 0.05, 0.10, 0.20)
+) -> List[Dict]:
+    """
+    Precision, recall and lift when inspecting the top fraction of customers by
+    score. This is how the model is used when inspections are limited.
+    """
+    y_true = np.asarray(y_true)
+    order = np.argsort(-np.asarray(y_score, dtype=float), kind="stable")
+    positives = max(int(y_true.sum()), 1)
+    base_rate = y_true.mean() if len(y_true) else 0.0
+    rows = []
+    for fraction in fractions:
+        k = max(int(np.ceil(fraction * len(y_true))), 1)
+        hits = int(y_true[order[:k]].sum())
+        precision = hits / k
+        rows.append({
+            'fraction': float(fraction),
+            'inspections': int(k),
+            'thefts_found': hits,
+            'precision': float(precision),
+            'recall': float(hits / positives),
+            'lift': float(precision / base_rate) if base_rate > 0 else 0.0,
+        })
+    return rows
 
 
 def save_metrics(

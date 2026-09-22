@@ -13,7 +13,7 @@ from imblearn.combine import SMOTEENN
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.under_sampling import EditedNearestNeighbours
-from sklearn.metrics import recall_score, precision_score, f1_score
+from sklearn.metrics import average_precision_score, recall_score, precision_score, f1_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import MinMaxScaler
 import joblib
@@ -83,14 +83,17 @@ def composite_score(
     return float(score)
 
 
-def _build_smote_enn(
+RESAMPLING_METHODS = ("smote_enn", "smote", "none")
+SCORING_METHODS = ("composite", "average_precision")
+
+
+def _build_smote(
     smote_enn_params: Optional[Dict] = None,
     random_state: int = 42
-) -> SMOTEENN:
-    """Create a configured SMOTEENN resampler from config-style parameters."""
+) -> SMOTE:
+    """Create a configured SMOTE oversampler from config-style parameters."""
     smote_enn_params = smote_enn_params or {}
     smote_config = smote_enn_params.get('smote', smote_enn_params)
-    enn_config = smote_enn_params.get('enn', {})
 
     sampling_strategy = smote_config.get(
         'sampling_strategy',
@@ -100,17 +103,27 @@ def _build_smote_enn(
         'k_neighbors',
         smote_enn_params.get('k_neighbors', 5)
     )
+    return SMOTE(
+        k_neighbors=smote_k_neighbors,
+        random_state=random_state,
+        sampling_strategy=sampling_strategy,
+    )
+
+
+def _build_smote_enn(
+    smote_enn_params: Optional[Dict] = None,
+    random_state: int = 42
+) -> SMOTEENN:
+    """Create a configured SMOTEENN resampler from config-style parameters."""
+    smote_enn_params = smote_enn_params or {}
+    enn_config = smote_enn_params.get('enn', {})
     enn_n_neighbors = enn_config.get(
         'n_neighbors',
         smote_enn_params.get('enn_n_neighbors', 3)
     )
 
     return SMOTEENN(
-        smote=SMOTE(
-            k_neighbors=smote_k_neighbors,
-            random_state=random_state,
-            sampling_strategy=sampling_strategy,
-        ),
+        smote=_build_smote(smote_enn_params, random_state=random_state),
         enn=EditedNearestNeighbours(
             n_neighbors=enn_n_neighbors,
             sampling_strategy='all',
@@ -119,15 +132,31 @@ def _build_smote_enn(
     )
 
 
+def _build_resampler(
+    resampling: str,
+    smote_enn_params: Optional[Dict] = None,
+    random_state: int = 42
+):
+    """Resampling step for the pipeline: SMOTE+ENN, SMOTE only, or none."""
+    if resampling == "smote_enn":
+        return _build_smote_enn(smote_enn_params, random_state=random_state)
+    if resampling == "smote":
+        return _build_smote(smote_enn_params, random_state=random_state)
+    if resampling == "none":
+        return "passthrough"
+    raise ValueError(f"Unknown resampling method {resampling!r}; expected one of {RESAMPLING_METHODS}")
+
+
 def build_cv_pipeline(
     smote_enn_params: Optional[Dict],
     xgb_params: Dict,
-    random_state: int = 42
+    random_state: int = 42,
+    resampling: str = "smote_enn"
 ) -> ImbPipeline:
     """Build the per-fold pipeline used during Optuna cross-validation."""
     return ImbPipeline([
         ('scaler', MinMaxScaler()),
-        ('resample', _build_smote_enn(smote_enn_params, random_state=random_state)),
+        ('resample', _build_resampler(resampling, smote_enn_params, random_state=random_state)),
         ('clf', xgb.XGBClassifier(**xgb_params)),
     ])
 
@@ -140,9 +169,18 @@ def evaluate_pipeline_cv(
     random_state: int,
     recall_weight: float = 0.60,
     precision_weight: float = 0.25,
-    f1_weight: float = 0.15
+    f1_weight: float = 0.15,
+    scoring: str = "composite"
 ) -> List[float]:
-    """Run per-fold evaluation for a pipeline factory and return fold scores."""
+    """
+    Run per-fold evaluation for a pipeline factory and return fold scores.
+    
+    scoring="composite" weights recall/precision/F1 of predict() at 0.5;
+    scoring="average_precision" is PR-AUC of predict_proba(), independent of
+    any threshold.
+    """
+    if scoring not in SCORING_METHODS:
+        raise ValueError(f"Unknown scoring {scoring!r}; expected one of {SCORING_METHODS}")
     skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
     scores: List[float] = []
 
@@ -155,15 +193,17 @@ def evaluate_pipeline_cv(
         y_val_fold = y.iloc[val_idx]
 
         pipeline.fit(X_train_fold, y_train_fold)
-        y_pred = pipeline.predict(X_val_fold)
 
-        score = composite_score(
-            y_val_fold,
-            y_pred,
-            recall_weight,
-            precision_weight,
-            f1_weight,
-        )
+        if scoring == "average_precision":
+            score = float(average_precision_score(y_val_fold, pipeline.predict_proba(X_val_fold)[:, 1]))
+        else:
+            score = composite_score(
+                y_val_fold,
+                pipeline.predict(X_val_fold),
+                recall_weight,
+                precision_weight,
+                f1_weight,
+            )
         scores.append(score)
 
     return scores
@@ -179,7 +219,9 @@ def train_xgb_with_optuna(
     recall_weight: float = 0.60,
     precision_weight: float = 0.25,
     f1_weight: float = 0.15,
-    timeout: Optional[int] = None
+    timeout: Optional[int] = None,
+    scoring: str = "composite",
+    resampling: str = "smote_enn"
 ) -> Tuple[Dict, optuna.Study]:
     """
     Train XGBoost with Optuna hyperparameter optimization.
@@ -201,7 +243,9 @@ def train_xgb_with_optuna(
         Tuple of (best_params, study)
     """
     logger.info(f"Starting Optuna optimization with {n_trials} trials, {cv}-fold CV...")
-    logger.info(f"Composite score weights: recall={recall_weight}, precision={precision_weight}, f1={f1_weight}")
+    logger.info(f"Scoring: {scoring}; resampling: {resampling}")
+    if scoring == "composite":
+        logger.info(f"Composite score weights: recall={recall_weight}, precision={precision_weight}, f1={f1_weight}")
     
     smote_enn_params = smote_enn_params or {}
     
@@ -230,6 +274,7 @@ def train_xgb_with_optuna(
             smote_enn_params,
             param,
             random_state=random_state,
+            resampling=resampling,
         )
 
         scores = evaluate_pipeline_cv(
@@ -241,6 +286,7 @@ def train_xgb_with_optuna(
             recall_weight=recall_weight,
             precision_weight=precision_weight,
             f1_weight=f1_weight,
+            scoring=scoring,
         )
 
         mean_score = float(sum(scores) / len(scores))
@@ -285,18 +331,55 @@ def fit_final_pipeline(
     y: pd.Series,
     xgb_params: Dict,
     smote_enn_params: Optional[Dict] = None,
-    random_state: int = 42
+    random_state: int = 42,
+    resampling: str = "smote_enn"
 ) -> ImbPipeline:
     """
-    Fit the deployable model: the same scaler -> SMOTE+ENN -> XGBoost pipeline
+    Fit the deployable model: the same scaler -> resample -> XGBoost pipeline
     that Optuna cross-validated, trained on the full training split.
     
     The fitted pipeline takes raw (unscaled) features. Resampling runs only
     during fit; predict/predict_proba apply the scaler and the classifier.
     """
-    pipeline = build_cv_pipeline(smote_enn_params, xgb_params, random_state=random_state)
+    pipeline = build_cv_pipeline(smote_enn_params, xgb_params, random_state=random_state, resampling=resampling)
     pipeline.fit(X, y)
     return pipeline
+
+
+def out_of_fold_probabilities(
+    X: pd.DataFrame,
+    y: pd.Series,
+    xgb_params: Dict,
+    smote_enn_params: Optional[Dict] = None,
+    cv: int = 5,
+    random_state: int = 42,
+    resampling: str = "smote_enn"
+) -> pd.Series:
+    """
+    Theft probability for every training row from a pipeline that did not see
+    that row. Used to choose the operating threshold without the test split.
+    """
+    skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
+    probabilities = pd.Series(np.nan, index=X.index, dtype=float)
+    for train_idx, val_idx in skf.split(X, y):
+        pipeline = build_cv_pipeline(smote_enn_params, xgb_params, random_state=random_state, resampling=resampling)
+        pipeline.fit(X.iloc[train_idx], y.iloc[train_idx])
+        probabilities.iloc[val_idx] = pipeline.predict_proba(X.iloc[val_idx])[:, 1]
+    return probabilities
+
+
+def threshold_for_budget(probabilities, budget_fraction: float) -> float:
+    """
+    Threshold that flags the top `budget_fraction` of customers by score.
+    
+    Returns the score of the k-th highest customer (k = ceil(budget * n)), so
+    `probability >= threshold` flags about k customers (more only on ties).
+    """
+    if not 0 < budget_fraction <= 1:
+        raise ValueError("budget_fraction must be in (0, 1]")
+    scores = np.sort(np.asarray(probabilities, dtype=float))[::-1]
+    k = max(int(np.ceil(budget_fraction * len(scores))), 1)
+    return float(scores[k - 1])
 
 
 def get_classifier(model):
@@ -316,7 +399,7 @@ def transform_for_classifier(model, X: pd.DataFrame) -> pd.DataFrame:
         return X
     transformed = X
     for _, step in model.steps[:-1]:
-        if hasattr(step, "fit_resample"):
+        if step is None or step == "passthrough" or hasattr(step, "fit_resample"):
             continue
         transformed = step.transform(transformed)
     return pd.DataFrame(np.asarray(transformed), columns=X.columns, index=X.index)
