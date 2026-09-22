@@ -54,6 +54,10 @@ artifacts/**/*.npy
 artifacts/**/*.pkl
 artifacts/**/*.joblib
 !artifacts/metrics.json
+!artifacts/features.csv
+!artifacts/feature_names.json
+!artifacts/best_params.json
+!artifacts/preprocess_report.json
 !artifacts/feature_importance.csv
 !artifacts/test_data.pkl
 !artifacts/.gitkeep

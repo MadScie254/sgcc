@@ -12,4 +12,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 *.log
-*.sqlite3
+*.sqlite3models/quick/
+models/demo/
+artifacts/quick/
+artifacts/demo/
