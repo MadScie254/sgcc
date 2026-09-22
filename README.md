@@ -65,7 +65,7 @@ Open `http://127.0.0.1:8000/`. The backend serves the built React app from `fron
 
 You do not need to retrain to run the app. Retrain only if you want a new model or updated metrics.
 
-The current training flow is split across `src/train.py` for the model and test split, then `src/eval.py` for metrics and feature-importance artifacts.
+`python src/train.py` retrains and writes one consistent set of artifacts: the model pipeline (`models/xgb_best.joblib`, which takes raw features), its held-out test metrics with provenance (`artifacts/metrics.json`), the test split, the feature matrix the API serves, and feature importances. `python src/eval.py` adds plots and SHAP summaries for the same model. `python src/train.py --quick` writes to `models/quick/` and `artifacts/quick/` and never replaces the deployed model.
 
 ## Project layout
 

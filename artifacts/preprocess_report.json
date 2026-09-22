@@ -1,0 +1,17 @@
+{
+  "method": "SMOTE+ENN (after MinMax scaling, inside the model pipeline)",
+  "original_distribution": {
+    "0": 18992,
+    "1": 1698
+  },
+  "resampled_distribution": {
+    "0": 10639,
+    "1": 7597
+  },
+  "original_total": 20690,
+  "resampled_total": 18236,
+  "samples_added": -2454,
+  "smote_k_neighbors": 7,
+  "enn_n_neighbors": 5,
+  "sampling_strategy": 0.8
+}

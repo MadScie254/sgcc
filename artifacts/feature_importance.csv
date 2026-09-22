@@ -1,3 +1,19 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:565d63576e4251bebbd8f430f6a067fac08c7810a7429a2b34eaead625e9977e
-size 463
+feature,importance
+std,0.21766753
+zero_day_count,0.21579893
+range,0.17892042
+min,0.07457385
+autocorr_lag1,0.051260013
+max,0.036296777
+mean,0.02952927
+missing_sequences_count,0.028886693
+slope_last_90d,0.027851824
+peak_day_ratio,0.02779819
+sudden_drop_count,0.020282686
+volatility_index,0.019666882
+coef_var,0.018153429
+skewness,0.017334353
+slope_full,0.015068236
+slope_last_30d,0.008479647
+weekday_vs_weekend_ratio,0.0064444253
+median,0.005986897

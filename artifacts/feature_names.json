@@ -1,0 +1,20 @@
+[
+  "mean",
+  "median",
+  "std",
+  "coef_var",
+  "min",
+  "max",
+  "range",
+  "skewness",
+  "slope_full",
+  "slope_last_30d",
+  "slope_last_90d",
+  "zero_day_count",
+  "sudden_drop_count",
+  "volatility_index",
+  "weekday_vs_weekend_ratio",
+  "peak_day_ratio",
+  "autocorr_lag1",
+  "missing_sequences_count"
+]
