@@ -1,0 +1,33 @@
+name: Fetch LFS objects
+description: >
+  Pull only the listed Git LFS objects, caching them by object id so repeat
+  runs do not spend LFS bandwidth. A full `git lfs pull` is ~1.2 GB.
+
+inputs:
+  include:
+    description: Comma-separated paths or globs to fetch (git lfs --include syntax).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: List LFS object ids
+      shell: bash
+      env:
+        LFS_INCLUDE: ${{ inputs.include }}
+      run: git lfs ls-files --long --include="$LFS_INCLUDE" | cut -d' ' -f1 | sort > .lfs-object-ids
+
+    - name: Restore LFS cache
+      uses: actions/cache@v6
+      with:
+        path: .git/lfs/objects
+        key: lfs-${{ runner.os }}-${{ hashFiles('.lfs-object-ids') }}
+
+    - name: Pull LFS objects
+      shell: bash
+      env:
+        LFS_INCLUDE: ${{ inputs.include }}
+      run: |
+        rm .lfs-object-ids
+        git lfs pull --include="$LFS_INCLUDE"
+        git lfs ls-files --include="$LFS_INCLUDE"
