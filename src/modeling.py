@@ -280,15 +280,57 @@ def train_xgb_with_optuna(
     return best_params, study
 
 
+def fit_final_pipeline(
+    X: pd.DataFrame,
+    y: pd.Series,
+    xgb_params: Dict,
+    smote_enn_params: Optional[Dict] = None,
+    random_state: int = 42
+) -> ImbPipeline:
+    """
+    Fit the deployable model: the same scaler -> SMOTE+ENN -> XGBoost pipeline
+    that Optuna cross-validated, trained on the full training split.
+    
+    The fitted pipeline takes raw (unscaled) features. Resampling runs only
+    during fit; predict/predict_proba apply the scaler and the classifier.
+    """
+    pipeline = build_cv_pipeline(smote_enn_params, xgb_params, random_state=random_state)
+    pipeline.fit(X, y)
+    return pipeline
+
+
+def get_classifier(model):
+    """Return the final estimator of a pipeline, or the model itself."""
+    if hasattr(model, "steps"):
+        return model.steps[-1][1]
+    return model
+
+
+def transform_for_classifier(model, X: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply a pipeline's preprocessing (skipping resamplers) so the result can be
+    fed to get_classifier(model), e.g. for SHAP. Returns X unchanged for a
+    bare classifier.
+    """
+    if not hasattr(model, "steps"):
+        return X
+    transformed = X
+    for _, step in model.steps[:-1]:
+        if hasattr(step, "fit_resample"):
+            continue
+        transformed = step.transform(transformed)
+    return pd.DataFrame(np.asarray(transformed), columns=X.columns, index=X.index)
+
+
 def save_model(
-    model: xgb.XGBClassifier,
+    model,
     model_path: str = "models/xgb_best.joblib"
 ) -> None:
     """
     Save trained model to disk.
     
     Args:
-        model: Trained XGBoost model
+        model: Fitted pipeline (see fit_final_pipeline) or classifier
         model_path: Path to save model
     """
     output_file = Path(model_path)
@@ -298,7 +340,7 @@ def save_model(
     logger.info(f"Saved model to {model_path}")
 
 
-def load_model(model_path: str = "models/xgb_best.joblib") -> xgb.XGBClassifier:
+def load_model(model_path: str = "models/xgb_best.joblib"):
     """
     Load trained model from disk.
     
@@ -306,7 +348,7 @@ def load_model(model_path: str = "models/xgb_best.joblib") -> xgb.XGBClassifier:
         model_path: Path to model file
     
     Returns:
-        Loaded XGBoost model
+        Loaded model; a fitted pipeline that takes raw features
     """
     model_file = Path(model_path)
     
@@ -403,9 +445,10 @@ if __name__ == "__main__":
     # Save a quick demo model fit for the module smoke test
     demo_model = get_xgb_model(params)
     demo_model.fit(X, y, verbose=False)
-    save_model(demo_model)
-    print(f"\n[INFO] Model saved to models/xgb_best.joblib")
-    
+    # Keep the demo away from the deployed model and study paths
+    save_model(demo_model, "models/demo/xgb_demo.joblib")
+    print(f"\n[INFO] Model saved to models/demo/xgb_demo.joblib")
+
     # Save study
-    save_optuna_study(study)
-    print(f"[INFO] Study saved to artifacts/optuna_study.pkl")
+    save_optuna_study(study, "artifacts/demo/optuna_study.pkl")
+    print(f"[INFO] Study saved to artifacts/demo/optuna_study.pkl")

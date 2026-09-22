@@ -343,30 +343,34 @@ if __name__ == "__main__":
     from pathlib import Path
     
     sys.path.insert(0, str(Path(__file__).parent))
-    from modeling import load_model
+    from modeling import load_model, get_classifier, transform_for_classifier
     
     logger.info("Running evaluation on saved model...")
     
     try:
-        # Load model and test data
+        # Load model (a pipeline that takes raw features) and its test split
         model = load_model("models/xgb_best.joblib")
         test_data = joblib.load("artifacts/test_data.pkl")
         X_test = test_data['X_test']
         y_test = test_data['y_test']
         
-        # Evaluate
-        metrics = evaluate_model(model, X_test, y_test)
+        # Evaluate, keeping the provenance fields written by src/train.py
+        metrics_path = Path("artifacts/metrics.json")
+        existing = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else {}
+        metrics = {**existing, **evaluate_model(model, X_test, y_test, threshold=existing.get('threshold', 0.5))}
         save_metrics(metrics)
         
         # Feature importance
-        save_feature_importance(model, list(X_test.columns))
+        classifier = get_classifier(model)
+        save_feature_importance(classifier, list(X_test.columns))
         
         # Error analysis
         y_pred = model.predict(X_test)
         error_analysis(X_test, y_test, y_pred)
         
-        # SHAP
-        generate_shap_explanations(model, X_test[:100], X_test)
+        # SHAP runs on the classifier, so explain the scaled features it sees
+        X_test_model = transform_for_classifier(model, X_test)
+        generate_shap_explanations(classifier, X_test_model[:100], X_test_model)
         
         # Plots
         plot_confusion_matrix(y_test, y_pred)
