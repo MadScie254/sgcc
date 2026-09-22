@@ -10,8 +10,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored so frontend/src/lib/ is not ignored
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -25,6 +26,7 @@ venv/
 env/
 ENV/
 .venv
+.venv-*/
 
 # Jupyter Notebook
 .ipynb_checkpoints
