@@ -46,8 +46,11 @@ features:
 
 # Preprocessing
 preprocessing:
-  # Resampling step inside the model pipeline: smote_enn | smote | none
-  resampling: smote_enn
+  # Resampling step inside the model pipeline: smote_enn | smote | none.
+  # 'none' won a 2026-09-22 ablation (3-fold CV PR-AUC on the training split,
+  # 25 Optuna trials each): none 0.210, smote 0.197, smote_enn 0.183.
+  # Class imbalance is still handled by XGBoost's tuned scale_pos_weight.
+  resampling: none
   smote_enn:
     random_state: 42
     smote:
