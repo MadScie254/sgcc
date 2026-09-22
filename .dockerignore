@@ -16,3 +16,5 @@ frontend/.vite/
 models/demo/
 artifacts/quick/
 artifacts/demo/
+models/memory_efficient/
+artifacts/memory_efficient/
