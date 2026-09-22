@@ -29,7 +29,7 @@ The pipeline targeted 85%+ recall and 75%+ precision. It was archived on 2026-09
 - The train/test split happens after augmentation, so any test metric would be measured largely on synthetic rows.
 - `data/data_realistic_imbalance.csv` is byte-identical to `data/data_augmented.csv` (same LFS object). The "1:19 realistic" mixture fell back to the full augmented frame.
 
-The augmented CSVs (`data_augmented.csv`, `data_balanced_50_50.csv`, `data_moderate_imbalance.csv`, `data_realistic_imbalance.csv`) are still in `data/`. They are derived from this generator and share the same defects.
+The augmented CSVs this generator produced (`data_augmented.csv`, `data_balanced_50_50.csv`, `data_moderate_imbalance.csv`, `data_realistic_imbalance.csv`; ~1 GB in LFS) had the same defects. They were removed from `data/` on 2026-09-22. They remain in Git history and LFS; to inspect one, check it out from a commit before the removal, e.g. `git checkout 192e884 -- data/data_augmented.csv`.
 
 ## What replaced it
 
