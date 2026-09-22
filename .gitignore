@@ -74,7 +74,11 @@ kaggle.json
 
 # Logs
 *.log
+*.err
 logs/
+
+# Local debug output (API probes, health snapshots)
+*.tmp.json
 
 # Environment
 .env
