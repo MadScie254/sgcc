@@ -115,6 +115,8 @@ class CustomersResponse(BaseModel):
 
 
 class ModelMetricsResponse(BaseModel):
+    model_version: Optional[str] = None
+    trained_at: Optional[str] = None
     threshold: float
     metrics: Dict[str, float]
     support: Dict[str, int]

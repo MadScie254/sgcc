@@ -12,7 +12,7 @@ import shap
 from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, accuracy_score, roc_auc_score
 
 from src.eval import evaluate_model
-from src.modeling import load_model
+from src.modeling import get_classifier, load_model, transform_for_classifier
 
 from .config import get_config, get_project_paths
 from .data import get_customer_timeseries, get_feature_matrix
@@ -29,13 +29,37 @@ def get_model_path() -> Path:
 
 @lru_cache(maxsize=1)
 def get_trained_model():
+    """The deployed model: a fitted pipeline that takes raw feature values."""
     return load_model(str(get_model_path()))
 
 
 @lru_cache(maxsize=1)
 def get_feature_names() -> List[str]:
+    model_features = getattr(get_trained_model(), "feature_names_in_", None)
+    if model_features is not None:
+        return [str(name) for name in model_features]
     X, _ = get_feature_matrix()
     return X.columns.tolist()
+
+
+@lru_cache(maxsize=1)
+def get_stored_metrics() -> Dict[str, Any]:
+    """Held-out test metrics and provenance written by src/train.py for the deployed model."""
+    metrics_path = get_project_paths()["artifacts"] / "metrics.json"
+    if not metrics_path.exists():
+        return {}
+    with open(metrics_path, "r", encoding="utf-8") as handle:
+        return cast(Dict[str, Any], json.load(handle))
+
+
+def get_model_version() -> str:
+    return str(get_stored_metrics().get("model_version", "unknown"))
+
+
+def _shap_values_for(feature_frame: pd.DataFrame):
+    """SHAP values from the pipeline's classifier, on the scaled features it sees."""
+    model_frame = transform_for_classifier(get_trained_model(), feature_frame)
+    return get_shap_explainer().shap_values(model_frame)
 
 
 def risk_tier_for_probability(probability: float) -> str:
@@ -70,25 +94,29 @@ def get_model_config() -> Dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def get_model_metrics() -> Dict[str, Any]:
-    metrics_path = get_project_paths()["artifacts"] / "metrics.json"
-    metrics: Dict[str, Any] = {}
-    if metrics_path.exists():
-        with open(metrics_path, "r", encoding="utf-8") as handle:
-            metrics = cast(Dict[str, Any], json.load(handle))
-
-    X, y = get_feature_matrix()
     model = get_trained_model()
-    probabilities = np.asarray(model.predict_proba(X)[:, 1], dtype=float)
+
+    # Evaluation view: the held-out test split from the model's own training run.
+    # Every figure in "metrics", "support" and "confusion_matrix" describes that split.
+    metrics = get_stored_metrics()
     threshold = float(metrics.get("threshold", 0.5))
-    predictions = np.asarray(probabilities >= threshold, dtype=int)
-    confusion = confusion_matrix(y, predictions)
-    support = metrics.get("support") or {
-        "class_0": int((y == 0).sum()),
-        "class_1": int((y == 1).sum()),
-    }
+    if "confusion_matrix" not in metrics:
+        test_data = get_test_data()
+        X_test = pd.DataFrame(cast(Any, test_data["X_test"]))[get_feature_names()]
+        y_test = pd.Series(cast(Any, test_data["y_test"]))
+        metrics = {**metrics, **evaluate_model(model, X_test, y_test, threshold=threshold)}
+    confusion = metrics["confusion_matrix"]
+    support = metrics["support"]
     total_support = max(int(support.get("class_0", 0)) + int(support.get("class_1", 0)), 1)
 
+    # Operational view: every customer the API serves
+    X, _ = get_feature_matrix()
+    probabilities = np.asarray(model.predict_proba(X[get_feature_names()])[:, 1], dtype=float)
+    predictions = np.asarray(probabilities >= threshold, dtype=int)
+
     return {
+        "model_version": metrics.get("model_version"),
+        "trained_at": metrics.get("trained_at"),
         "threshold": threshold,
         "metrics": {
             "recall": float(metrics.get("recall", 0.0)),
@@ -104,10 +132,10 @@ def get_model_metrics() -> Dict[str, Any]:
             "class_1": int(support.get("class_1", 0)),
         },
         "confusion_matrix": {
-            "tn": int(confusion[0, 0]),
-            "fp": int(confusion[0, 1]),
-            "fn": int(confusion[1, 0]),
-            "tp": int(confusion[1, 1]),
+            "tn": int(confusion["tn"]),
+            "fp": int(confusion["fp"]),
+            "fn": int(confusion["fn"]),
+            "tp": int(confusion["tp"]),
         },
         "customers_monitored": int(len(X)),
         "flagged_today": int(predictions.sum()),
@@ -125,7 +153,7 @@ def get_model_metrics() -> Dict[str, Any]:
 def get_customer_rankings() -> List[Dict[str, Any]]:
     X, _ = get_feature_matrix()
     model = get_trained_model()
-    probabilities = np.asarray(model.predict_proba(X)[:, 1], dtype=float)
+    probabilities = np.asarray(model.predict_proba(X[get_feature_names()])[:, 1], dtype=float)
     frame = pd.DataFrame(
         {
             "customer_id": X.index.astype(str),
@@ -189,7 +217,7 @@ def get_feature_importance_from_csv(limit: int = 15) -> List[Dict[str, Any]]:
 def get_feature_importance(limit: int = 20) -> List[Dict[str, object]]:
     model = get_trained_model()
     feature_names = get_feature_names()
-    importance = getattr(model, "feature_importances_", None)
+    importance = getattr(get_classifier(model), "feature_importances_", None)
     if importance is None:
         raise RuntimeError("Model does not expose feature_importances_")
 
@@ -206,8 +234,7 @@ def get_feature_importance(limit: int = 20) -> List[Dict[str, object]]:
 
 @lru_cache(maxsize=1)
 def get_shap_explainer():
-    model = get_trained_model()
-    return shap.TreeExplainer(model)
+    return shap.TreeExplainer(get_classifier(get_trained_model()))
 
 
 @lru_cache(maxsize=1)
@@ -267,8 +294,7 @@ def predict_for_customer(customer_id: str, threshold: float = 0.5) -> Dict[str, 
 
 
 def get_top_reasons(feature_frame: pd.DataFrame, top_n: int = 3) -> List[Dict[str, float]]:
-    explainer = get_shap_explainer()
-    shap_values = explainer.shap_values(feature_frame)
+    shap_values = _shap_values_for(feature_frame)
 
     if isinstance(shap_values, list):
         shap_array = np.asarray(shap_values[1 if len(shap_values) > 1 else 0])
@@ -294,7 +320,7 @@ def get_top_reasons(feature_frame: pd.DataFrame, top_n: int = 3) -> List[Dict[st
 
 
 def _extract_shap_values(explainer, feature_frame: pd.DataFrame) -> tuple[float, List[float]]:
-    shap_values = explainer.shap_values(feature_frame)
+    shap_values = _shap_values_for(feature_frame)
 
     if isinstance(shap_values, list):
         shap_array = np.asarray(shap_values[1 if len(shap_values) > 1 else 0])
@@ -313,11 +339,9 @@ def _extract_shap_values(explainer, feature_frame: pd.DataFrame) -> tuple[float,
 
 @lru_cache(maxsize=1)
 def get_global_shap_sample(sample_count: int = 200) -> Dict[str, object]:
-    model = get_trained_model()
     X, _ = get_feature_matrix()
-    sample_frame = X.head(sample_count).copy()
-    explainer = get_shap_explainer()
-    shap_values = explainer.shap_values(sample_frame)
+    sample_frame = X[get_feature_names()].head(sample_count).copy()
+    shap_values = _shap_values_for(sample_frame)
 
     if isinstance(shap_values, list):
         shap_values = shap_values[1 if len(shap_values) > 1 else 0]
@@ -367,7 +391,7 @@ def get_local_shap_details(customer_id: str) -> Dict[str, object]:
 def threshold_preview(threshold: float) -> Dict[str, object]:
     model = get_trained_model()
     test_data = get_test_data()
-    X_test = pd.DataFrame(cast(Any, test_data["X_test"]))
+    X_test = pd.DataFrame(cast(Any, test_data["X_test"]))[get_feature_names()]
     y_test = pd.Series(cast(Any, test_data["y_test"]))
     probabilities = np.asarray(model.predict_proba(X_test)[:, 1], dtype=float)
     predictions = np.asarray(probabilities >= threshold, dtype=int)

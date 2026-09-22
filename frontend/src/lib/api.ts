@@ -159,6 +159,8 @@ export interface CustomersResponse {
 }
 
 export interface ModelMetricsResponse {
+  model_version?: string | null;
+  trained_at?: string | null;
   threshold: number;
   metrics: Record<string, number>;
   support: Record<string, number>;
