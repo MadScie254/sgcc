@@ -14,14 +14,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from data_loader import load_raw, save_processed_features, load_processed_features
 
 
-def test_load_raw_structure():
+@pytest.fixture(scope="module")
+def small_dataset(small_dataset_path):
+    """Load datasetsmall.csv once for all tests in this module."""
+    return load_raw(str(small_dataset_path))
+
+
+def test_load_raw_structure(small_dataset):
     """Test that load_raw returns correct data structures."""
-    data_path = "data/datasetsmall.csv"
-    
-    if not Path(data_path).exists():
-        pytest.skip("Dataset not available")
-    
-    df_long, labels = load_raw(data_path)
+    df_long, labels = small_dataset
     
     # Check DataFrame structure
     assert isinstance(df_long, pd.DataFrame), "df_long should be a DataFrame"
@@ -41,14 +42,9 @@ def test_load_raw_structure():
     assert len(labels) > 0, "labels should not be empty"
 
 
-def test_load_raw_customer_count():
+def test_load_raw_customer_count(small_dataset):
     """Test that customer count matches."""
-    data_path = "data/datasetsmall.csv"
-    
-    if not Path(data_path).exists():
-        pytest.skip("Dataset not available")
-    
-    df_long, labels = load_raw(data_path)
+    df_long, labels = small_dataset
     
     unique_customers = df_long['customer_id'].nunique()
     label_count = len(labels)
@@ -56,14 +52,9 @@ def test_load_raw_customer_count():
     assert unique_customers == label_count, "Number of customers should match label count"
 
 
-def test_load_raw_consumption_values():
+def test_load_raw_consumption_values(small_dataset):
     """Test that consumption values are reasonable."""
-    data_path = "data/datasetsmall.csv"
-    
-    if not Path(data_path).exists():
-        pytest.skip("Dataset not available")
-    
-    df_long, labels = load_raw(data_path)
+    df_long, labels = small_dataset
     
     consumption = df_long['consumption_kwh']
     
@@ -84,7 +75,9 @@ def test_save_and_load_features(tmp_path):
         'feature3': np.random.rand(10)
     }, index=[f'customer_{i}' for i in range(10)])
     
-    y = pd.Series(np.random.randint(0, 2, 10), index=X.index, name='label')
+    # load_processed_features returns int32 labels; np.random.randint's default
+    # dtype is platform-dependent (int32 on Windows, int64 on Linux)
+    y = pd.Series(np.random.randint(0, 2, 10), index=X.index, name='label', dtype='int32')
     
     # Save
     output_path = tmp_path / "test_features.csv"
@@ -103,14 +96,9 @@ def test_save_and_load_features(tmp_path):
     pd.testing.assert_series_equal(y, y_loaded)
 
 
-def test_load_raw_index_types():
+def test_load_raw_index_types(small_dataset):
     """Test that day_index is sequential."""
-    data_path = "data/datasetsmall.csv"
-    
-    if not Path(data_path).exists():
-        pytest.skip("Dataset not available")
-    
-    df_long, labels = load_raw(data_path)
+    df_long, labels = small_dataset
     
     # Check day_index is integer-like
     assert pd.api.types.is_integer_dtype(df_long['day_index']), "day_index should be integer type"
