@@ -6,14 +6,19 @@ export function formatMaybeNumber(value: number | null | undefined, decimals = 2
   return value.toFixed(decimals);
 }
 
-// Keep these thresholds aligned with backend/services/model.py.
-// If HIGH_RISK_THRESHOLD or MEDIUM_RISK_THRESHOLD change there, update this helper too.
-export function riskTierFromProbability(probability: number): "high" | "medium" | "low" {
-  if (probability >= 0.7) {
+// Fallback cutoffs, matching backend/services/model.py. Prefer the
+// risk_tier_thresholds returned by /api/model/metrics for the deployed model.
+export const DEFAULT_RISK_TIER_THRESHOLDS = { high: 0.7, medium: 0.4 };
+
+export function riskTierFromProbability(
+  probability: number,
+  thresholds: { high: number; medium: number } = DEFAULT_RISK_TIER_THRESHOLDS,
+): "high" | "medium" | "low" {
+  if (probability >= thresholds.high) {
     return "high";
   }
 
-  if (probability >= 0.4) {
+  if (probability >= thresholds.medium) {
     return "medium";
   }
 

@@ -18,6 +18,7 @@ from .config import get_config, get_project_paths
 from .data import get_customer_timeseries, get_feature_matrix
 
 
+# Fallback tier cutoffs for artifacts that predate operating_point in metrics.json
 HIGH_RISK_THRESHOLD = 0.7
 MEDIUM_RISK_THRESHOLD = 0.4
 
@@ -62,10 +63,30 @@ def _shap_values_for(feature_frame: pd.DataFrame):
     return get_shap_explainer().shap_values(model_frame)
 
 
+def get_decision_threshold() -> float:
+    """Threshold the deployed model was evaluated at (the inspection-budget cutoff)."""
+    return float(get_stored_metrics().get("threshold", 0.5))
+
+
+def get_risk_tier_thresholds() -> Dict[str, float]:
+    """
+    Score cutoffs for the risk tiers. "high" is the decision threshold (the
+    customers flagged for inspection); "medium" is the wider watch-list band.
+    """
+    operating_point = get_stored_metrics().get("operating_point") or {}
+    if "threshold" in operating_point and "medium_threshold" in operating_point:
+        return {
+            "high": float(operating_point["threshold"]),
+            "medium": float(operating_point["medium_threshold"]),
+        }
+    return {"high": HIGH_RISK_THRESHOLD, "medium": MEDIUM_RISK_THRESHOLD}
+
+
 def risk_tier_for_probability(probability: float) -> str:
-    if probability >= HIGH_RISK_THRESHOLD:
+    thresholds = get_risk_tier_thresholds()
+    if probability >= thresholds["high"]:
         return "high"
-    if probability >= MEDIUM_RISK_THRESHOLD:
+    if probability >= thresholds["medium"]:
         return "medium"
     return "low"
 
@@ -113,11 +134,16 @@ def get_model_metrics() -> Dict[str, Any]:
     X, _ = get_feature_matrix()
     probabilities = np.asarray(model.predict_proba(X[get_feature_names()])[:, 1], dtype=float)
     predictions = np.asarray(probabilities >= threshold, dtype=int)
+    tiers = get_risk_tier_thresholds()
+    operating_point = metrics.get("operating_point") or {}
 
     return {
         "model_version": metrics.get("model_version"),
         "trained_at": metrics.get("trained_at"),
         "threshold": threshold,
+        "risk_tier_thresholds": tiers,
+        "inspection_budget_fraction": operating_point.get("budget_fraction"),
+        "ranking": metrics.get("ranking", []),
         "metrics": {
             "recall": float(metrics.get("recall", 0.0)),
             "precision": float(metrics.get("precision", 0.0)),
@@ -126,6 +152,7 @@ def get_model_metrics() -> Dict[str, Any]:
             "auc": float(metrics.get("auc", 0.0)),
             "gmean": float(metrics.get("gmean", 0.0)),
             "mcc": float(metrics.get("mcc", 0.0)),
+            "average_precision": float(metrics.get("average_precision", 0.0)),
         },
         "support": {
             "class_0": int(support.get("class_0", 0)),
@@ -142,9 +169,9 @@ def get_model_metrics() -> Dict[str, Any]:
         "current_mean_probability": float(probabilities.mean()) if len(probabilities) else 0.0,
         "base_rate": float(int(support.get("class_1", 0)) / total_support),
         "risk_tier_distribution": {
-            "high": int((probabilities >= HIGH_RISK_THRESHOLD).sum()),
-            "medium": int(((probabilities >= MEDIUM_RISK_THRESHOLD) & (probabilities < HIGH_RISK_THRESHOLD)).sum()),
-            "low": int((probabilities < MEDIUM_RISK_THRESHOLD).sum()),
+            "high": int((probabilities >= tiers["high"]).sum()),
+            "medium": int(((probabilities >= tiers["medium"]) & (probabilities < tiers["high"])).sum()),
+            "low": int((probabilities < tiers["medium"]).sum()),
         },
     }
 
@@ -264,7 +291,8 @@ def get_customer_feature_row(customer_id: str) -> pd.DataFrame:
     return pd.DataFrame([row.to_dict()], columns=get_feature_names())
 
 
-def predict_from_features(features: Dict[str, float], threshold: float = 0.5) -> Dict[str, object]:
+def predict_from_features(features: Dict[str, float], threshold: Optional[float] = None) -> Dict[str, object]:
+    threshold = get_decision_threshold() if threshold is None else threshold
     model = get_trained_model()
     feature_frame = _align_feature_row(features)
     probability = float(model.predict_proba(feature_frame)[:, 1][0])
@@ -278,7 +306,8 @@ def predict_from_features(features: Dict[str, float], threshold: float = 0.5) ->
     }
 
 
-def predict_for_customer(customer_id: str, threshold: float = 0.5) -> Dict[str, object]:
+def predict_for_customer(customer_id: str, threshold: Optional[float] = None) -> Dict[str, object]:
+    threshold = get_decision_threshold() if threshold is None else threshold
     model = get_trained_model()
     feature_frame = get_customer_feature_row(customer_id)
     probability = float(model.predict_proba(feature_frame)[:, 1][0])

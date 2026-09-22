@@ -158,10 +158,27 @@ export interface CustomersResponse {
   risk_tier?: string | null;
 }
 
+export interface RiskTierThresholds {
+  high: number;
+  medium: number;
+}
+
+export interface RankingRow {
+  fraction: number;
+  inspections: number;
+  thefts_found: number;
+  precision: number;
+  recall: number;
+  lift: number;
+}
+
 export interface ModelMetricsResponse {
   model_version?: string | null;
   trained_at?: string | null;
   threshold: number;
+  risk_tier_thresholds?: RiskTierThresholds;
+  inspection_budget_fraction?: number | null;
+  ranking?: RankingRow[];
   metrics: Record<string, number>;
   support: Record<string, number>;
   confusion_matrix: Record<string, number>;
