@@ -123,3 +123,22 @@ def test_metrics_endpoint_reports_the_test_split(serving, artifacts):
     assert payload["confusion_matrix"] == stored["confusion_matrix"]
     assert payload["support"] == stored["support"]
     assert payload["model_version"] == stored["model_version"]
+
+
+def test_operating_point_is_consistent_with_the_model(serving, artifacts):
+    stored = artifacts["metrics"]
+    operating_point = stored.get("operating_point")
+    if operating_point is None:
+        pytest.skip("metrics.json predates operating_point")
+
+    assert stored["threshold"] == operating_point["threshold"]
+    assert operating_point["medium_threshold"] <= operating_point["threshold"]
+
+    scores = artifacts["model"].predict_proba(artifacts["X_test"])[:, 1]
+    assert float((scores >= stored["threshold"]).mean()) == pytest.approx(operating_point["test_flag_rate"], abs=1e-12)
+
+    assert serving.get_decision_threshold() == stored["threshold"]
+    assert serving.get_risk_tier_thresholds() == {
+        "high": operating_point["threshold"],
+        "medium": operating_point["medium_threshold"],
+    }
