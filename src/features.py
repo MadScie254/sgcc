@@ -283,17 +283,19 @@ def build_features(
             'missing_sequence_threshold': 3
         }
     
-    # Group by customer and aggregate
-    customers = df_long['customer_id'].unique()
-    logger.info(f"Processing {len(customers)} customers...")
-    
+    # Group by customer and aggregate. Grouping once keeps this linear in the
+    # number of rows; sort=False preserves first-appearance customer order and
+    # each group keeps its original row (day) order.
+    grouped = df_long.groupby('customer_id', sort=False)
+    n_customers = grouped.ngroups
+    logger.info(f"Processing {n_customers} customers...")
+
     feature_list = []
-    
-    for idx, customer_id in enumerate(customers):
-        if idx % 100 == 0:
-            logger.info(f"Processing customer {idx}/{len(customers)}...")
-        
-        customer_data = df_long[df_long['customer_id'] == customer_id]
+
+    for idx, (customer_id, customer_data) in enumerate(grouped):
+        if idx % 5000 == 0:
+            logger.info(f"Processing customer {idx}/{n_customers}...")
+
         consumption = customer_data['consumption_kwh'].values
         
         # Compute all feature groups

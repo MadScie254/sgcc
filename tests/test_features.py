@@ -167,5 +167,25 @@ def test_build_features_mock():
     assert X.shape[1] >= 10
 
 
+def test_build_features_interleaved_rows():
+    """Rows interleaved across customers give the same features as contiguous rows."""
+    rng = np.random.default_rng(0)
+    contiguous = pd.DataFrame({
+        'customer_id': ['C1'] * 60 + ['C2'] * 60 + ['C3'] * 60,
+        'day_index': list(range(60)) * 3,
+        'consumption_kwh': rng.random(180) * 50
+    })
+    # Day-major order: C1 d0, C2 d0, C3 d0, C1 d1, ...
+    interleaved = contiguous.sort_values(['day_index', 'customer_id'], kind='stable')
+    labels = pd.Series([0, 1, 0], index=['C1', 'C2', 'C3'], name='label')
+
+    X_contiguous, y_contiguous = build_features(contiguous, labels)
+    X_interleaved, y_interleaved = build_features(interleaved, labels)
+
+    assert list(X_interleaved.index) == ['C1', 'C2', 'C3']
+    pd.testing.assert_frame_equal(X_contiguous, X_interleaved)
+    pd.testing.assert_series_equal(y_contiguous, y_interleaved)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
