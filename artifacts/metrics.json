@@ -1,22 +1,102 @@
 {
-  "threshold": 0.5,
-  "recall": 0.4056603773584906,
-  "precision": 0.13639968279143536,
-  "f1": 0.20415430267062315,
-  "accuracy": 0.7407693794703267,
-  "auc": 0.6276326297095317,
-  "gmean": 0.5591402458373674,
-  "mcc": 0.11266782449490198,
+  "threshold": 0.19640646874904633,
+  "recall": 0.16037735849056603,
+  "precision": 0.2982456140350877,
+  "f1": 0.2085889570552147,
+  "accuracy": 0.9002513048521168,
+  "auc": 0.6677694311016817,
+  "average_precision": 0.2282711979691106,
+  "gmean": 0.39366741831397395,
+  "mcc": 0.16930206459801175,
   "confusion_matrix": {
-    "tn": 3660,
-    "fp": 1089,
-    "fn": 252,
-    "tp": 172
+    "tn": 4589,
+    "fp": 160,
+    "fn": 356,
+    "tp": 68
   },
   "support": {
     "class_0": 4749,
     "class_1": 424
   },
-  "specificity": 0.7706885660138977,
-  "sensitivity": 0.4056603773584906
+  "specificity": 0.9663086965676985,
+  "sensitivity": 0.16037735849056603,
+  "operating_point": {
+    "method": "inspection_budget",
+    "budget_fraction": 0.05,
+    "medium_budget_fraction": 0.15,
+    "threshold": 0.19640646874904633,
+    "medium_threshold": 0.12339445948600769,
+    "selected_on": "5-fold out-of-fold scores on the training split",
+    "oof_average_precision": 0.21365488461040982,
+    "oof_flag_rate": 0.0500241662638956,
+    "test_flag_rate": 0.04407500483278562
+  },
+  "ranking": [
+    {
+      "fraction": 0.01,
+      "inspections": 52,
+      "thefts_found": 33,
+      "precision": 0.6346153846153846,
+      "recall": 0.07783018867924528,
+      "lift": 7.742607039187227
+    },
+    {
+      "fraction": 0.05,
+      "inspections": 259,
+      "thefts_found": 69,
+      "precision": 0.26640926640926643,
+      "recall": 0.16273584905660377,
+      "lift": 3.250318714941357
+    },
+    {
+      "fraction": 0.1,
+      "inspections": 518,
+      "thefts_found": 115,
+      "precision": 0.222007722007722,
+      "recall": 0.27122641509433965,
+      "lift": 2.7085989291177968
+    },
+    {
+      "fraction": 0.2,
+      "inspections": 1035,
+      "thefts_found": 176,
+      "precision": 0.17004830917874397,
+      "recall": 0.41509433962264153,
+      "lift": 2.07466958344727
+    }
+  ],
+  "model_version": "20260922T201855Z-b5bc1f6",
+  "trained_at": "2026-09-22T20:18:55+00:00",
+  "git_commit": "b5bc1f6",
+  "config_path": "config.yaml",
+  "quick_mode": false,
+  "model_path": "models/xgb_best.joblib",
+  "data": {
+    "path": "data/datasetsmall.csv",
+    "sha256": "62453a33945ca0513ece9661bad03dbdc37ccdc2e867f596b753683f6b83048e",
+    "n_customers": 25863,
+    "n_days": 26,
+    "theft_rate": 0.0820477129490005
+  },
+  "split": {
+    "test_size": 0.2,
+    "random_state": 42,
+    "n_train": 20690,
+    "n_test": 5173
+  },
+  "optuna": {
+    "n_trials": 100,
+    "cv_folds": 5,
+    "scoring": "average_precision",
+    "best_cv_score": 0.21656082873900928,
+    "scoring_weights": null
+  },
+  "resampling": "none",
+  "libraries": {
+    "xgboost": "3.1.2",
+    "scikit-learn": "1.8.0",
+    "imbalanced-learn": "0.14.1",
+    "pandas": "2.2.3",
+    "numpy": "2.3.5"
+  }
 }

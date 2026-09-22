@@ -350,14 +350,24 @@ class CheckpointedOptunaTrainer:
         return checkpoint
 
 
+# This experimental trainer saves a bare classifier fitted on scaled features,
+# which the API cannot serve (it expects the pipeline from src/train.py). Keep
+# its outputs away from the deployed model and artifacts.
+OUTPUT_MODELS_DIR = Path("models/memory_efficient")
+OUTPUT_ARTIFACTS_DIR = Path("artifacts/memory_efficient")
+
+
 def train_memory_efficient(
-    config_path: str = "config_ultra.yaml",
+    config_path: str = "config.yaml",
     quick_mode: bool = False,
     resume_from_checkpoint: bool = True
 ) -> Dict:
     """
     Memory-efficient training pipeline optimized for low-resource PCs.
-    
+
+    Writes to models/memory_efficient/ and artifacts/memory_efficient/; use
+    src/train.py to produce the deployed model.
+
     Args:
         config_path: Path to configuration file
         quick_mode: Use reduced dataset and trials
@@ -446,8 +456,8 @@ def train_memory_efficient(
     )
     
     # Save preprocessing report
-    Path("artifacts").mkdir(exist_ok=True)
-    with open("artifacts/preprocess_report.json", 'w') as f:
+    OUTPUT_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(OUTPUT_ARTIFACTS_DIR / "preprocess_report.json", 'w') as f:
         json.dump(preprocess_report, f, indent=2)
     
     # Step 5: Normalize features
@@ -458,8 +468,8 @@ def train_memory_efficient(
         X_test_scaled = scaler.transform(X_test)
         
         # Save scaler with compression
-        joblib.dump(scaler, "artifacts/scaler.joblib", compress=memory_config['compression_level'])
-        logger.info("Saved scaler to artifacts/scaler.joblib")
+        joblib.dump(scaler, OUTPUT_ARTIFACTS_DIR / "scaler.joblib", compress=memory_config['compression_level'])
+        logger.info(f"Saved scaler to {OUTPUT_ARTIFACTS_DIR / 'scaler.joblib'}")
     
     # Step 6: Train with checkpointed Optuna
     logger.info("\n[STEP 6/6] Training XGBoost with checkpointed Optuna...")
@@ -515,13 +525,13 @@ def train_memory_efficient(
     final_model.fit(X_train_scaled, y_train_res)
     
     # Save model with compression
-    Path("models").mkdir(exist_ok=True)
-    joblib.dump(final_model, "models/xgb_best.joblib", compress=memory_config['compression_level'])
-    logger.info("Saved model to models/xgb_best.joblib")
+    OUTPUT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    joblib.dump(final_model, OUTPUT_MODELS_DIR / "xgb_best.joblib", compress=memory_config['compression_level'])
+    logger.info(f"Saved model to {OUTPUT_MODELS_DIR / 'xgb_best.joblib'}")
     
     # Save test data
     test_data = {'X_test': X_test_scaled, 'y_test': y_test}
-    joblib.dump(test_data, "artifacts/test_data.pkl", compress=memory_config['compression_level'])
+    joblib.dump(test_data, OUTPUT_ARTIFACTS_DIR / "test_data.pkl", compress=memory_config['compression_level'])
     
     # Save results
     results = {
@@ -547,7 +557,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Memory-efficient training for SGCC')
-    parser.add_argument('--config', type=str, default='config_ultra.yaml', help='Config file path')
+    parser.add_argument('--config', type=str, default='config.yaml', help='Config file path')
     parser.add_argument('--quick', action='store_true', help='Quick mode (10% data, 20 trials)')
     parser.add_argument('--no-resume', action='store_true', help='Do not resume from checkpoint')
     parser.add_argument('--profile-memory', action='store_true', help='Enable detailed memory profiling')

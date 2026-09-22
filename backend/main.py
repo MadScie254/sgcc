@@ -25,7 +25,8 @@ from backend.routers.reports import router as reports_router
 from backend.routers.predict import router as predict_router
 from backend.routers.train import router as train_router
 from backend.dependencies.auth import load_api_key, require_api_key
-from backend.services.model import get_feature_names, get_model_config, get_shap_explainer, get_trained_model
+from backend.services.data import get_feature_matrix
+from backend.services.model import get_feature_names, get_model_version, get_shap_explainer, get_trained_model
 
 
 logger = logging.getLogger(__name__)
@@ -34,11 +35,14 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.api_key = load_api_key()
+    app.state.warmup_error = None
     try:
         get_trained_model()
         get_shap_explainer()
         get_feature_names()
-    except Exception:
+        get_feature_matrix()
+    except Exception as exc:
+        app.state.warmup_error = f"{type(exc).__name__}: {exc}"
         logger.exception("Backend startup warmup failed")
     yield
 
@@ -69,7 +73,7 @@ app.include_router(reports_router, **secured_router_kwargs)
 
 
 @app.get("/api/health")
-def health() -> dict:
+def health(request: Request) -> dict:
     try:
         model = get_trained_model()
         model_loaded = model is not None
@@ -77,17 +81,21 @@ def health() -> dict:
         model_loaded = False
 
     try:
-        model_version = get_model_config().get("model", {}).get("version", "unknown")
+        model_version = get_model_version()
     except Exception:
         model_version = "unknown"
 
+    warmup_error = getattr(request.app.state, "warmup_error", None)
+    healthy = model_loaded and warmup_error is None
     payload = {
-        "status": "ok" if model_loaded else "degraded",
+        "status": "ok" if healthy else "degraded",
         "service": "sgcc-backend",
         "model_loaded": model_loaded,
         "model_version": model_version,
     }
-    if not model_loaded:
+    if warmup_error:
+        payload["warmup_error"] = warmup_error
+    if not healthy:
         return JSONResponse(status_code=503, content=payload)
     return payload
 

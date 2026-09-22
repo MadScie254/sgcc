@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getModelConfig, predictSingle } from "@/lib/api";
+import { getModelConfig, getModelMetrics, predictSingle } from "@/lib/api";
 import { CenteredState } from "@/components/CenteredState";
 import { CustomerPicker } from "@/components/CustomerPicker";
 import { Panel, Button, Input } from "@/components/ui/primitives";
@@ -15,10 +15,19 @@ export function PredictPage() {
   const [mode, setMode] = useState<EntryMode>("lookup");
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(searchParams.get("customer"));
   const [threshold, setThreshold] = useState(0.5);
+  const [thresholdTouched, setThresholdTouched] = useState(false);
   const [prediction, setPrediction] = useState<Awaited<ReturnType<typeof predictSingle>> | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, string>>({});
 
   const configQuery = useQuery({ queryKey: ["model-config"], queryFn: getModelConfig, staleTime: 30_000 });
+  const metricsQuery = useQuery({ queryKey: ["model-metrics"], queryFn: getModelMetrics, staleTime: 30_000 });
+  const tierThresholds = metricsQuery.data?.risk_tier_thresholds;
+
+  // Start from the deployed model's decision threshold until the user moves the slider
+  useEffect(() => {
+    const deployedThreshold = metricsQuery.data?.threshold;
+    if (deployedThreshold !== undefined && !thresholdTouched) setThreshold(deployedThreshold);
+  }, [metricsQuery.data, thresholdTouched]);
   const featureGroups = useMemo(() => Object.entries(configQuery.data?.feature_groups ?? {}), [configQuery.data]);
 
   useEffect(() => {
@@ -51,7 +60,7 @@ export function PredictPage() {
 
   const probability = prediction?.probability ?? null;
   const derivedLabel = probability === null ? null : probability >= threshold ? 1 : 0;
-  const derivedTier = probability === null ? null : riskTierFromProbability(probability);
+  const derivedTier = probability === null ? null : riskTierFromProbability(probability, tierThresholds);
 
   if (configQuery.isError) {
     return <CenteredState title="Model unavailable" description="The prediction form could not load the model configuration. Verify the API and trained artifacts." />;
@@ -127,15 +136,18 @@ export function PredictPage() {
             <div className="min-w-40 space-y-2">
               <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-secondary">
                 <span>Threshold</span>
-                <span className="font-mono text-primary">{threshold.toFixed(2)}</span>
+                <span className="font-mono text-primary">{threshold.toFixed(3)}</span>
               </div>
               <input
                 type="range"
-                min="0.1"
-                max="0.9"
-                step="0.05"
+                min="0"
+                max="1"
+                step="0.005"
                 value={threshold}
-                onChange={(event) => setThreshold(Number(event.target.value))}
+                onChange={(event) => {
+                  setThresholdTouched(true);
+                  setThreshold(Number(event.target.value));
+                }}
                 className="h-2 w-full cursor-pointer appearance-none rounded-full bg-surface-alt accent-accent"
               />
             </div>

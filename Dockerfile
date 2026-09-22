@@ -26,6 +26,8 @@ COPY backend ./backend
 COPY src ./src
 COPY models ./models
 COPY artifacts ./artifacts
+# Raw readings back the customer time-series endpoint
+COPY data/datasetsmall.csv ./data/datasetsmall.csv
 COPY config.yaml ./
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 

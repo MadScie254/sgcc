@@ -16,7 +16,7 @@ import seaborn as sns
 import shap
 from sklearn.metrics import (
     recall_score, precision_score, f1_score, accuracy_score,
-    roc_auc_score, confusion_matrix, classification_report,
+    roc_auc_score, average_precision_score, confusion_matrix, classification_report,
     matthews_corrcoef, roc_curve, precision_recall_curve
 )
 from imblearn.metrics import geometric_mean_score
@@ -59,6 +59,7 @@ def evaluate_model(
         'f1': float(f1_score(y_test, y_pred, zero_division=0)),
         'accuracy': float(accuracy_score(y_test, y_pred)),
         'auc': float(roc_auc_score(y_test, y_pred_proba)),
+        'average_precision': float(average_precision_score(y_test, y_pred_proba)),
         'gmean': float(geometric_mean_score(y_test, y_pred)),
         'mcc': float(matthews_corrcoef(y_test, y_pred))
     }
@@ -91,6 +92,35 @@ def evaluate_model(
     logger.info(f"MCC: {metrics['mcc']:.4f}")
     
     return metrics
+
+
+def ranking_metrics(
+    y_true,
+    y_score,
+    fractions: Tuple[float, ...] = (0.01, 0.05, 0.10, 0.20)
+) -> List[Dict]:
+    """
+    Precision, recall and lift when inspecting the top fraction of customers by
+    score. This is how the model is used when inspections are limited.
+    """
+    y_true = np.asarray(y_true)
+    order = np.argsort(-np.asarray(y_score, dtype=float), kind="stable")
+    positives = max(int(y_true.sum()), 1)
+    base_rate = y_true.mean() if len(y_true) else 0.0
+    rows = []
+    for fraction in fractions:
+        k = max(int(np.ceil(fraction * len(y_true))), 1)
+        hits = int(y_true[order[:k]].sum())
+        precision = hits / k
+        rows.append({
+            'fraction': float(fraction),
+            'inspections': int(k),
+            'thefts_found': hits,
+            'precision': float(precision),
+            'recall': float(hits / positives),
+            'lift': float(precision / base_rate) if base_rate > 0 else 0.0,
+        })
+    return rows
 
 
 def save_metrics(
@@ -343,30 +373,34 @@ if __name__ == "__main__":
     from pathlib import Path
     
     sys.path.insert(0, str(Path(__file__).parent))
-    from modeling import load_model
+    from modeling import load_model, get_classifier, transform_for_classifier
     
     logger.info("Running evaluation on saved model...")
     
     try:
-        # Load model and test data
+        # Load model (a pipeline that takes raw features) and its test split
         model = load_model("models/xgb_best.joblib")
         test_data = joblib.load("artifacts/test_data.pkl")
         X_test = test_data['X_test']
         y_test = test_data['y_test']
         
-        # Evaluate
-        metrics = evaluate_model(model, X_test, y_test)
+        # Evaluate, keeping the provenance fields written by src/train.py
+        metrics_path = Path("artifacts/metrics.json")
+        existing = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else {}
+        metrics = {**existing, **evaluate_model(model, X_test, y_test, threshold=existing.get('threshold', 0.5))}
         save_metrics(metrics)
         
         # Feature importance
-        save_feature_importance(model, list(X_test.columns))
+        classifier = get_classifier(model)
+        save_feature_importance(classifier, list(X_test.columns))
         
         # Error analysis
         y_pred = model.predict(X_test)
         error_analysis(X_test, y_test, y_pred)
         
-        # SHAP
-        generate_shap_explanations(model, X_test[:100], X_test)
+        # SHAP runs on the classifier, so explain the scaled features it sees
+        X_test_model = transform_for_classifier(model, X_test)
+        generate_shap_explanations(classifier, X_test_model[:100], X_test_model)
         
         # Plots
         plot_confusion_matrix(y_test, y_pred)

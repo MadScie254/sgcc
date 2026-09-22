@@ -3,10 +3,6 @@
 *.pkl filter=lfs diff=lfs merge=lfs -text
 *.parquet filter=lfs diff=lfs merge=lfs -text
 *.bin filter=lfs diff=lfs merge=lfs -text
-data_moderate_imbalance.csv filter=lfs diff=lfs merge=lfs -text
-data_realistic_imbalance.csv filter=lfs diff=lfs merge=lfs -text
-data_balanced_50_50.csv filter=lfs diff=lfs merge=lfs -text
-data_augmented.csv filter=lfs diff=lfs merge=lfs -text
 datasetsmall.csv filter=lfs diff=lfs merge=lfs -text
 data[[:space:]]set.csv filter=lfs diff=lfs merge=lfs -text
 *.joblib filter=lfs diff=lfs merge=lfs -text
@@ -16,3 +12,10 @@ data[[:space:]]set.csv filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
 *.tar.gz filter=lfs diff=lfs merge=lfs -text
 *.gz filter=lfs diff=lfs merge=lfs -text
+
+# Small model artifacts (<10 MB) are stored directly in Git, not LFS, so the
+# model can be updated without spending LFS storage or bandwidth.
+models/xgb_best.joblib -filter -diff -merge -text
+artifacts/features.csv -filter -diff -merge -text
+artifacts/test_data.pkl -filter -diff -merge -text
+artifacts/feature_importance.csv -filter -diff -merge -text

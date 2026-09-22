@@ -55,7 +55,8 @@ class PredictionReason(BaseModel):
 class SinglePredictionRequest(BaseModel):
     customer_id: Optional[str] = None
     features: Optional[Dict[str, float]] = None
-    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Defaults to the deployed model's decision threshold when omitted
+    threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class SinglePredictionResponse(BaseModel):
@@ -115,7 +116,12 @@ class CustomersResponse(BaseModel):
 
 
 class ModelMetricsResponse(BaseModel):
+    model_version: Optional[str] = None
+    trained_at: Optional[str] = None
     threshold: float
+    risk_tier_thresholds: Dict[str, float] = Field(default_factory=dict)
+    inspection_budget_fraction: Optional[float] = None
+    ranking: List[Dict[str, float]] = Field(default_factory=list)
     metrics: Dict[str, float]
     support: Dict[str, int]
     confusion_matrix: Dict[str, int]
