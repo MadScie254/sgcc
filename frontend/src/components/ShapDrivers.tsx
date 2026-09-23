@@ -1,5 +1,6 @@
 import type { PredictionReason } from "@/lib/api";
 import { cn } from "@/components/ui/primitives";
+import { formatMaybeNumber } from "@/lib/dashboard";
 
 type ShapDriversProps = {
   items: PredictionReason[];
@@ -29,7 +30,7 @@ export function ShapDrivers({ items, title = "Top SHAP drivers", emptyLabel = "S
                 <div className="h-1.5 overflow-hidden rounded-full bg-surface-alt">
                   <div className={cn("h-full rounded-full", isPositive ? "bg-danger" : "bg-success")} style={{ width: `${width}%` }} />
                 </div>
-                <div className="text-[11px] text-secondary">{item.value.toFixed(4)}</div>
+                <div className="text-[11px] text-secondary">{item.value === null ? "missing" : formatMaybeNumber(item.value, 4)}</div>
               </div>
             );
           })}

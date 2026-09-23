@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Dict, List
 
 import requests
+
+
+def _country(code: str) -> str:
+    code = str(code).strip().upper()
+    if not re.fullmatch(r"[A-Z]{2}", code):
+        raise ValueError(f"Invalid ISO country code: {code!r}")
+    return code
 
 
 def _request_json(url: str, params: Dict[str, Any] | None = None, headers: Dict[str, str] | None = None) -> Dict[str, Any] | List[Dict[str, Any]]:
@@ -16,7 +24,7 @@ def _request_json(url: str, params: Dict[str, Any] | None = None, headers: Dict[
 @lru_cache(maxsize=32)
 def get_country_context(country_code: str = "DZ") -> Dict[str, Any]:
     try:
-        payload = _request_json(f"https://restcountries.com/v3.1/alpha/{country_code}")
+        payload = _request_json(f"https://restcountries.com/v3.1/alpha/{_country(country_code)}")
         country = payload[0]
         currencies = country.get("currencies", {})
         return {
@@ -42,9 +50,9 @@ def get_country_context(country_code: str = "DZ") -> Dict[str, Any]:
 
 @lru_cache(maxsize=32)
 def get_public_holidays(country_code: str = "DZ", year: int | None = None) -> List[Dict[str, Any]]:
-    target_year = year or datetime.utcnow().year
+    target_year = int(year or datetime.now(timezone.utc).year)
     try:
-        payload = _request_json(f"https://date.nager.at/api/v3/PublicHolidays/{target_year}/{country_code.upper()}")
+        payload = _request_json(f"https://date.nager.at/api/v3/PublicHolidays/{target_year}/{_country(country_code)}")
         return [dict(item) for item in payload]
     except Exception:
         return []

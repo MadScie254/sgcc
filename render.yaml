@@ -2,15 +2,18 @@ services:
   - type: web
     name: sgcc-backend
     runtime: python
-    buildCommand: pip install -r requirements.lock && git lfs pull --include="data/datasetsmall.csv,models/xgb_best.joblib,artifacts/test_data.pkl,artifacts/feature_importance.csv" && cd frontend && npm ci && npm run build && cd ..
+    buildCommand: pip install -r requirements.lock && cd frontend && npm ci && npm run build && cd ..
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
     envVars:
       # requirements.lock is compiled for Python 3.11
       - key: PYTHON_VERSION
         value: 3.11.15
       - key: ENV
         value: production
+      # Enter this value on the dashboard's Settings page.
       - key: API_KEY
         generateValue: true
+      # Only needed when the frontend is served from a different origin.
       - key: FRONTEND_DEV_ORIGIN
         value: https://<your-render-url>.onrender.com

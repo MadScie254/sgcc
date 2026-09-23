@@ -6,54 +6,12 @@ on:
   pull_request:
     branches: [main, develop]
 
-env:
-  # LFS objects the API reads at runtime. Keep in sync with render.yaml.
-  API_LFS_INCLUDE: data/datasetsmall.csv,models/xgb_best.joblib,artifacts/test_data.pkl,artifacts/feature_importance.csv
-
 jobs:
   backend-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.11']
-    env:
-      # Fail, rather than skip, data tests if LFS files are still pointers
-      REQUIRE_LFS: '1'
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Fetch LFS test data
-        uses: ./.github/actions/fetch-lfs
-        with:
-          include: data/datasetsmall.csv
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: requirements.lock
-
-      - name: Install backend dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.lock
-
-      - name: Run backend tests
-        run: |
-          pytest tests/ -v
-
-  api-smoke-test:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Fetch LFS artifacts
-        uses: ./.github/actions/fetch-lfs
-        with:
-          include: ${{ env.API_LFS_INCLUDE }}
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v7
@@ -62,37 +20,57 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.lock
 
-      - name: Install backend dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  api-smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock
 
       - name: Start API
         env:
-          ENV: development
+          ENV: production
+          API_KEY: ci-smoke-key
         run: |
           uvicorn backend.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
 
       - name: Wait for API health
         run: |
-          # Startup builds the feature matrix from data/datasetsmall.csv (~1 min)
-          for attempt in $(seq 1 180); do
+          for attempt in $(seq 1 60); do
             code=$(curl -s -o health.json -w "%{http_code}" http://127.0.0.1:8000/api/health || true)
             if [ "$code" = "200" ]; then
-              python -c "import json, sys; payload = json.load(open('health.json', encoding='utf-8')); print('API healthy and model loaded.') if payload.get('model_loaded') is True else (print('API started, but model_loaded is false.'), sys.exit(1))"
+              python -c "import json, sys; sys.exit(0 if json.load(open('health.json'))['model_loaded'] else 1)"
               exit 0
             fi
             sleep 1
           done
-
-          echo "API did not become healthy within 180 seconds."
-          cat api.log
+          echo "API did not become healthy within 60 seconds."
           exit 1
 
       - name: Smoke test secured endpoints
         run: |
-          curl -fsS http://127.0.0.1:8000/api/customers >/dev/null
-          curl -fsS http://127.0.0.1:8000/api/model/metrics >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/customers)" = "401"
+          curl -fsS -H "X-API-Key: ci-smoke-key" http://127.0.0.1:8000/api/customers >/dev/null
+          curl -fsS -H "X-API-Key: ci-smoke-key" http://127.0.0.1:8000/api/model/metrics >/dev/null
 
       - name: Show API log on failure
         if: failure()

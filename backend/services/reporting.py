@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import csv
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,8 +14,16 @@ from fastapi.responses import FileResponse
 from fpdf import FPDF
 
 from backend.services.config import get_project_paths
-from backend.services.model import get_feature_names, get_model_metrics, get_trained_model, get_customer_rankings, risk_tier_for_probability
+from backend.services.model import (
+    get_customer_rankings,
+    get_decision_threshold,
+    get_feature_names,
+    get_model_metrics,
+    predict_frame,
+    risk_tier_for_probability,
+)
 from backend.services.public_apis import get_country_context, get_public_holidays, get_weather_context
+from backend.services.uploads import parse_csv, read_csv_upload
 
 
 UPLOAD_INDEX_FILENAME = "catalog.json"
@@ -74,17 +81,6 @@ def _save_report_index(items: List[Dict[str, Any]]) -> None:
     _write_json_list(_report_index_path(), items)
 
 
-def _load_csv_frame(file_bytes: bytes) -> pd.DataFrame:
-    return pd.read_csv(pd.io.common.BytesIO(file_bytes))
-
-
-def _coerce_numeric(frame: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-    coerced = frame.reindex(columns=columns, fill_value=0.0).copy()
-    for column in columns:
-        coerced[column] = pd.to_numeric(coerced[column], errors="coerce").fillna(0.0)
-    return coerced
-
-
 def _detect_label_column(frame: pd.DataFrame) -> Optional[str]:
     for candidate in ("label", "target", "is_theft", "theft"):
         if candidate in frame.columns:
@@ -94,12 +90,8 @@ def _detect_label_column(frame: pd.DataFrame) -> Optional[str]:
 
 def verify_dataset_frame(frame: pd.DataFrame) -> Dict[str, Any]:
     feature_names = get_feature_names()
-    model = get_trained_model()
-    metrics = get_model_metrics()
-    threshold = float(metrics["threshold"])
-
-    aligned = _coerce_numeric(frame, feature_names)
-    probabilities = np.asarray(model.predict_proba(aligned)[:, 1], dtype=float)
+    threshold = get_decision_threshold()
+    probabilities = predict_frame(frame)
     predictions = (probabilities >= threshold).astype(int)
 
     label_column = _detect_label_column(frame)
@@ -116,10 +108,8 @@ def verify_dataset_frame(frame: pd.DataFrame) -> Dict[str, Any]:
     top_rows = frame.copy()
     top_rows["prediction_probability"] = probabilities
     top_rows["prediction"] = predictions
-    top_rows["risk_tier"] = top_rows["prediction_probability"].apply(risk_tier_for_probability)
-    sort_columns = ["prediction_probability"]
-    if "customer_id" in top_rows.columns:
-        sort_columns.insert(0, "customer_id")
+    top_rows["risk_tier"] = [risk_tier_for_probability(p, threshold) for p in probabilities]
+    tiers = top_rows["risk_tier"]
 
     top_risk_rows = top_rows.sort_values("prediction_probability", ascending=False).head(10)
 
@@ -133,9 +123,9 @@ def verify_dataset_frame(frame: pd.DataFrame) -> Dict[str, Any]:
         "predicted_positive_rows": int(predictions.sum()),
         "mean_probability": float(probabilities.mean()) if len(probabilities) else 0.0,
         "median_probability": float(np.median(probabilities)) if len(probabilities) else 0.0,
-        "high_risk_rows": int((probabilities >= 0.7).sum()),
-        "medium_risk_rows": int(((probabilities >= 0.4) & (probabilities < 0.7)).sum()),
-        "low_risk_rows": int((probabilities < 0.4).sum()),
+        "high_risk_rows": int((tiers == "high").sum()),
+        "medium_risk_rows": int((tiers == "medium").sum()),
+        "low_risk_rows": int((tiers == "low").sum()),
         "label_column": label_column,
         "verification_accuracy": verification_accuracy,
         "verification_mismatches": mismatches,
@@ -143,17 +133,16 @@ def verify_dataset_frame(frame: pd.DataFrame) -> Dict[str, Any]:
 
     return {
         "summary": summary,
-        "top_risk_rows": top_risk_rows.replace({np.nan: None}).to_dict(orient="records"),
+        "top_risk_rows": top_risk_rows.astype(object).where(top_risk_rows.notna(), None).to_dict(orient="records"),
         "probabilities": probabilities.tolist(),
         "predictions": predictions.tolist(),
     }
 
 
 async def register_uploaded_dataset(file: UploadFile) -> Dict[str, Any]:
-    upload_bytes = await file.read()
-    frame = _load_csv_frame(upload_bytes)
-    dataset_id = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    stored_name = f"{dataset_id}-{_slugify(file.filename or 'dataset')}.csv"
+    frame, upload_bytes = await read_csv_upload(file)
+    dataset_id = f"{_utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    stored_name = f"{dataset_id}-{_slugify(Path(file.filename or 'dataset').stem)[:60]}.csv"
     stored_path = _paths()["uploads"] / stored_name
     stored_path.write_bytes(upload_bytes)
 
@@ -162,8 +151,8 @@ async def register_uploaded_dataset(file: UploadFile) -> Dict[str, Any]:
         "dataset_id": dataset_id,
         "original_filename": file.filename or stored_name,
         "stored_filename": stored_name,
-        "stored_path": str(stored_path),
-        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "stored_path": stored_name,  # resolved inside the uploads directory on read
+        "uploaded_at": _utcnow().isoformat(),
         "rows": verification["summary"]["rows"],
         "columns": verification["summary"]["columns"],
         "status": "verified" if not verification["summary"]["missing_features"] else "needs_review",
@@ -186,33 +175,45 @@ def get_uploaded_dataset(dataset_id: str) -> Dict[str, Any]:
 
 
 def _load_frame_from_catalog_item(item: Dict[str, Any]) -> pd.DataFrame:
-    stored_path = Path(item["stored_path"])
-    if not stored_path.exists():
-        raise FileNotFoundError(f"Uploaded dataset missing on disk: {stored_path}")
-    return pd.read_csv(stored_path)
+    # Resolve by file name inside the uploads directory; never trust a stored absolute path.
+    stored_path = _paths()["uploads"] / Path(str(item["stored_filename"])).name
+    if not stored_path.is_file():
+        raise FileNotFoundError(f"Uploaded dataset missing on disk: {stored_path.name}")
+    return parse_csv(stored_path.read_bytes())
 
 
 def _report_pdf_path(report_id: str) -> Path:
+    if not re.fullmatch(r"report-[0-9]{14}-[0-9a-f]{8}", report_id):
+        raise KeyError(f"Unknown report_id: {report_id}")
     return _paths()["reports"] / f"{report_id}.pdf"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _pdf_text(value: Any) -> str:
+    # FPDF core fonts are Latin-1 only.
+    return str(value).encode("latin-1", "replace").decode("latin-1")
 
 
 def _render_pdf(report: Dict[str, Any], pdf_path: Path) -> None:
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=14)
     pdf.add_page()
-    pdf.set_font("Arial", "B", 18)
-    pdf.cell(0, 10, "SGCC Analytics Report", ln=True)
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(0, 8, f"Generated: {report['generated_at']}", ln=True)
-    pdf.cell(0, 8, f"Dataset: {report['dataset_label']}", ln=True)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 10, "SGCC Analytics Report", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 8, f"Generated: {report['generated_at']}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, _pdf_text(f"Dataset: {report['dataset_label']}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     def section(title: str, lines: List[str]) -> None:
-        pdf.set_font("Arial", "B", 13)
-        pdf.cell(0, 8, title, ln=True)
-        pdf.set_font("Arial", "", 10)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 8, title, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 10)
         for line in lines:
-            pdf.multi_cell(0, 6, line)
+            pdf.multi_cell(0, 6, _pdf_text(line), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
 
     section(
@@ -282,8 +283,8 @@ def generate_report(dataset_id: Optional[str] = None, country_code: str = "DZ", 
         }
         dataset_label = get_dataset_summary()["dataset_path"]
 
-    report_id = f"report-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    generated_at = datetime.utcnow().isoformat() + "Z"
+    report_id = f"report-{_utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    generated_at = _utcnow().isoformat()
     model_metrics = get_model_metrics()
     country = get_country_context(country_code)
     holidays = get_public_holidays(country_code)
@@ -312,13 +313,13 @@ def generate_report(dataset_id: Optional[str] = None, country_code: str = "DZ", 
         "dataset_id": dataset_id,
         "dataset_label": dataset_label,
         "generated_at": generated_at,
-        "pdf_path": str(pdf_path),
+        "pdf_path": pdf_path.name,
     }
     _store_report_index(entry)
 
     report.update(
         {
-            "pdf_path": str(pdf_path),
+            "pdf_path": pdf_path.name,
             "download_url": f"/api/reports/{report_id}/download",
         }
     )
@@ -333,8 +334,8 @@ def get_report_entry(report_id: str) -> Dict[str, Any]:
 
 
 def build_report_file_response(report_id: str) -> FileResponse:
-    entry = get_report_entry(report_id)
-    pdf_path = Path(entry["pdf_path"])
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"Report PDF missing on disk: {pdf_path}")
+    get_report_entry(report_id)
+    pdf_path = _report_pdf_path(report_id)
+    if not pdf_path.is_file():
+        raise FileNotFoundError(f"Report PDF missing on disk: {pdf_path.name}")
     return FileResponse(pdf_path, media_type="application/pdf", filename=pdf_path.name)

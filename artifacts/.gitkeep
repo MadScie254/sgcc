@@ -1,2 +1,1 @@
-# This directory stores training artifacts
-# Files: metrics.json, feature_importance.csv, shap_values.npy, etc.
+# Training artifacts: metrics.json, feature_importance.csv, best_params.json

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.schemas.api import FeatureImportanceItem
 from backend.schemas.api import ModelConfigResponse, ModelMetricsResponse
@@ -23,7 +23,7 @@ def config() -> ModelConfigResponse:
 
 
 @router.get("/feature-importance", response_model=list[FeatureImportanceItem])
-def feature_importance(limit: int = 15) -> list[FeatureImportanceItem]:
+def feature_importance(limit: int = Query(default=15, ge=1, le=100)) -> list[FeatureImportanceItem]:
     try:
         return [FeatureImportanceItem(**item) for item in get_feature_importance_from_csv(limit=limit)]
     except FileNotFoundError as exc:

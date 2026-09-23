@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DatasetSummary(BaseModel):
@@ -34,6 +34,7 @@ class CorrelationMatrixResponse(BaseModel):
 
 class TimeSeriesPoint(BaseModel):
     day_index: int
+    date: Optional[str] = None
     consumption_kwh: Optional[float] = None
     sudden_drop: bool = False
     anomaly_score: float = 0.0
@@ -48,14 +49,15 @@ class CustomerTimeseriesResponse(BaseModel):
 
 class PredictionReason(BaseModel):
     feature: str
-    value: float
+    value: Optional[float] = None
     shap_value: float
 
 
 class SinglePredictionRequest(BaseModel):
     customer_id: Optional[str] = None
-    features: Optional[Dict[str, float]] = None
-    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    features: Optional[Dict[str, float]] = Field(default=None, max_length=500)
+    # Defaults to the model's tuned decision threshold.
+    threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class SinglePredictionResponse(BaseModel):
@@ -63,6 +65,7 @@ class SinglePredictionResponse(BaseModel):
     prediction: int
     probability: float
     threshold: float
+    risk_tier: Optional[str] = None
     top_reasons: List[PredictionReason] = Field(default_factory=list)
 
 
@@ -80,14 +83,14 @@ class FeatureImportanceItem(BaseModel):
 class GlobalShapResponse(BaseModel):
     feature_names: List[str]
     shap_values: List[List[float]]
-    feature_values: List[List[float]]
+    feature_values: List[List[Optional[float]]]
     sample_count: int
 
 
 class LocalShapResponse(BaseModel):
     customer_id: str
     feature_names: List[str]
-    feature_values: List[float]
+    feature_values: List[Optional[float]]
     shap_values: List[float]
     base_value: float
     probability: float
@@ -170,9 +173,9 @@ class DatasetUploadResponse(BaseModel):
 
 class ReportRequest(BaseModel):
     dataset_id: Optional[str] = None
-    country_code: str = Field(default="DZ", min_length=2, max_length=2)
-    latitude: float = 36.7538
-    longitude: float = 3.0588
+    country_code: str = Field(default="DZ", pattern="^[A-Za-z]{2}$")
+    latitude: float = Field(default=36.7538, ge=-90, le=90)
+    longitude: float = Field(default=3.0588, ge=-180, le=180)
 
 
 class ReportResponse(BaseModel):
@@ -196,9 +199,20 @@ class AnalyticsDashboardResponse(BaseModel):
     context: Dict[str, Any]
 
 
+class TrainingOverrides(BaseModel):
+    """The only training settings a client may change; paths and data sources stay server-side."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    n_trials: Optional[int] = Field(default=None, ge=1, le=200)
+    cv_folds: Optional[int] = Field(default=None, ge=2, le=10)
+    timeout_seconds: Optional[int] = Field(default=None, ge=60, le=6 * 3600)
+    test_size: Optional[float] = Field(default=None, gt=0.05, lt=0.5)
+
+
 class TrainingJobCreateRequest(BaseModel):
-    mode: str = Field(default="quick", pattern="^(quick|full|custom)$")
-    config_overrides: Optional[Dict[str, Any]] = None
+    mode: Literal["quick", "full"] = "quick"
+    config_overrides: Optional[TrainingOverrides] = None
 
 
 class TrainingJobStatusResponse(BaseModel):

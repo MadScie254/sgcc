@@ -1,246 +1,175 @@
 """
 SGCC Theft Detector - Data Loader Module
 
-Handles loading and preprocessing of the SGCC dataset from CSV.
-Converts wide-format time series data to long format suitable for feature engineering.
+Loads the SGCC smart-meter dataset (one row per customer, one column per day)
+into a chronologically ordered wide matrix, and converts it to long format for
+the API's per-customer time-series views.
 """
 
-import pandas as pd
-import numpy as np
 import logging
+import re
 from pathlib import Path
-from typing import Tuple, Optional
-import warnings
+from typing import Optional, Tuple
 
-warnings.filterwarnings('ignore')
+import numpy as np
+import pandas as pd
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+ID_COLUMNS = ("CONS_NO", "CUSTOMER_ID", "customer_id")
+LABEL_COLUMNS = ("FLAG", "label")
 
-def load_raw(
-    path: str,
-    encoding: str = 'utf-8'
-) -> Tuple[pd.DataFrame, pd.Series]:
+# Extra metadata columns written by older augmentation scripts.
+_METADATA_COLUMNS = {
+    "IS_SYNTHETIC", "CUSTOMER_TYPE", "THEFT_TYPE", "MEAN_MONTHLY_CONSUMPTION",
+    "STD_MONTHLY_CONSUMPTION", "MAX_MONTHLY_CONSUMPTION", "MIN_MONTHLY_CONSUMPTION",
+    "MEDIAN_MONTHLY_CONSUMPTION", "CONSUMPTION_TREND", "COEFFICIENT_OF_VARIATION",
+    "MAX_CONSUMPTION_DROP", "MONTHS_WITH_ZERO", "MONTHS_WITH_LOW_CONSUMPTION",
+    "RECENT_VS_HISTORICAL_RATIO", "QUARTERLY_STD",
+}
+
+_DATE_LIKE = re.compile(r"^\d{1,4}[/-]\d{1,2}[/-]\d{1,4}$")
+
+
+def _find_column(columns, candidates) -> Optional[str]:
+    for name in candidates:
+        if name in columns:
+            return name
+    return None
+
+
+def _parse_dates(columns) -> Optional[pd.DatetimeIndex]:
+    """Parse day columns as dates, or return None if they are not all dates."""
+    names = [str(c).strip() for c in columns]
+    if not names or not all(_DATE_LIKE.match(n) for n in names):
+        return None
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+        parsed = pd.to_datetime(names, format=fmt, errors="coerce")
+        if not parsed.isna().any():
+            return pd.DatetimeIndex(parsed)
+    return None
+
+
+def load_wide(path: str) -> Tuple[pd.DataFrame, pd.Series]:
     """
-    Load raw SGCC dataset from CSV file.
-    
-    The dataset is expected in wide format where:
-    - Each row represents one customer
-    - Columns 0 to N-2 contain daily consumption readings
-    - Column N-1 contains customer_id (32-char hex hash)
-    - Column N contains binary label (0=honest, 1=theft)
-    
-    Args:
-        path: Path to the CSV file
-        encoding: File encoding (default: 'utf-8')
-    
+    Load the SGCC dataset as a wide customer-by-day matrix.
+
+    Supported layouts:
+    - SGCC original: ``CONS_NO, FLAG, <date columns>`` (date columns in any order)
+    - Named id/label columns anywhere (``CUSTOMER_ID``/``customer_id``, ``FLAG``/``label``)
+    - Positional: day columns first, then customer id, then label
+
+    Date-named day columns are sorted chronologically; the raw SGCC file stores
+    them in lexicographic order ("2014/1/1", "2014/1/10", ...), which scrambles
+    any order-dependent feature if left as is.
+
     Returns:
-        Tuple of (df_long, labels) where:
-        - df_long: DataFrame with columns [customer_id, day_index, consumption_kwh]
-        - labels: Series with customer_id as index and binary labels (0/1)
-    
-    Raises:
-        FileNotFoundError: If the CSV file doesn't exist
-        ValueError: If the data format is unexpected
+        (wide, labels): ``wide`` is float32, indexed by customer id (str), with
+        one column per day (DatetimeIndex when the header holds dates).
+        ``labels`` is an int Series named ``label`` on the same index.
     """
     file_path = Path(path)
-    
     if not file_path.exists():
         raise FileNotFoundError(f"Data file not found: {path}")
-    
-    logger.info(f"Loading data from {path}...")
-    
-    # Try different encodings
-    encodings_to_try = [encoding, 'latin-1', 'iso-8859-1', 'cp1252']
-    df = None
-    
-    for enc in encodings_to_try:
-        try:
-            df = pd.read_csv(path, encoding=enc, low_memory=False)
-            logger.info(f"Successfully loaded with encoding: {enc}")
-            break
-        except UnicodeDecodeError:
-            continue
-        except Exception as e:
-            logger.warning(f"Failed with encoding {enc}: {str(e)}")
-    
-    if df is None:
-        raise ValueError(f"Could not load file with any encoding: {encodings_to_try}")
-    
-    logger.info(f"Loaded data shape: {df.shape}")
-    
-    # Check if data already has CUSTOMER_ID and FLAG columns (augmented data format)
-    if 'CUSTOMER_ID' in df.columns and 'FLAG' in df.columns:
-        logger.info("Detected augmented data format with CUSTOMER_ID and FLAG columns")
-        customer_ids = df['CUSTOMER_ID'].astype(str)
-        labels = df['FLAG'].astype(int)
-        
-        # Get consumption columns (date columns like '1/1/2014')
-        # Exclude non-consumption columns
-        exclude_cols = ['CUSTOMER_ID', 'FLAG', 'IS_SYNTHETIC', 'CUSTOMER_TYPE', 'THEFT_TYPE',
-                       'MEAN_MONTHLY_CONSUMPTION', 'STD_MONTHLY_CONSUMPTION', 
-                       'MAX_MONTHLY_CONSUMPTION', 'MIN_MONTHLY_CONSUMPTION', 'MEDIAN_MONTHLY_CONSUMPTION',
-                       'CONSUMPTION_TREND', 'COEFFICIENT_OF_VARIATION', 'MAX_CONSUMPTION_DROP',
-                       'MONTHS_WITH_ZERO', 'MONTHS_WITH_LOW_CONSUMPTION', 
-                       'RECENT_VS_HISTORICAL_RATIO', 'QUARTERLY_STD']
-        consumption_cols = [col for col in df.columns if col not in exclude_cols]
-        
+
+    logger.info("Loading data from %s...", path)
+    df = pd.read_csv(file_path, low_memory=False)
+
+    id_col = _find_column(df.columns, ID_COLUMNS)
+    label_col = _find_column(df.columns, LABEL_COLUMNS)
+    if id_col is None or label_col is None:
+        if df.shape[1] < 3:
+            raise ValueError("Expected day columns plus customer id and label columns")
+        id_col, label_col = df.columns[-2], df.columns[-1]
+
+    customer_ids = df[id_col].astype(str).str.strip()
+    labels = pd.to_numeric(df[label_col], errors="coerce").fillna(0).astype(int)
+    if not set(labels.unique()).issubset({0, 1}):
+        raise ValueError(f"Label column {label_col!r} must be binary 0/1")
+
+    day_columns = [c for c in df.columns if c not in {id_col, label_col} and c not in _METADATA_COLUMNS]
+    values = df[day_columns].apply(pd.to_numeric, errors="coerce")
+
+    dates = _parse_dates(day_columns)
+    if dates is not None:
+        order = np.argsort(dates.values, kind="stable")
+        values = values.iloc[:, order]
+        values.columns = dates[order]
     else:
-        # Original format: detect if we have headers or not
-        # If first row contains numeric data only (except last 2 cols), it's headerless
-        first_row_numeric = df.iloc[0, :-2].apply(lambda x: pd.api.types.is_numeric_dtype(type(x)) or isinstance(x, (int, float)))
-        
-        if not first_row_numeric.all():
-            # Has headers, skip first row
-            logger.info("Detected headers in first row")
-            df.columns = [f'day_{i}' if i < len(df.columns)-2 else ('customer_id' if i == len(df.columns)-2 else 'FLAG') 
-                         for i in range(len(df.columns))]
-        else:
-            # Headerless - assign column names
-            logger.info("No headers detected - assigning column names")
-            df.columns = [f'day_{i}' if i < len(df.columns)-2 else ('customer_id' if i == len(df.columns)-2 else 'FLAG') 
-                         for i in range(len(df.columns))]
-        
-        # Extract customer IDs and labels
-        customer_ids = df['customer_id'].astype(str)
-        labels = df['FLAG'].astype(int)
-        
-        # Get consumption columns (all except customer_id and FLAG)
-        consumption_cols = [col for col in df.columns if col not in ['customer_id', 'FLAG']]
-    
-    # Extract customer IDs and labels
-    labels = labels.fillna(0).astype(int)  # Fill any NaN labels with 0 (honest)
-    
-    # Get consumption columns (all except customer_id and FLAG)
-    consumption_cols = [col for col in df.columns if col not in ['customer_id', 'FLAG']]
-    
-    logger.info(f"Found {len(consumption_cols)} consumption columns")
-    logger.info(f"Found {len(customer_ids)} customers")
-    logger.info(f"Label distribution:\n{labels.value_counts()}")
-    
-    # Convert to long format
-    logger.info("Converting to long format...")
-    df_consumption = df[consumption_cols]
-    
-    # Replace non-numeric values with NaN
-    df_consumption = df_consumption.apply(pd.to_numeric, errors='coerce')
-    
-    # Create long format
-    records = []
-    for idx, customer_id in enumerate(customer_ids):
-        consumptions = df_consumption.iloc[idx].values
-        for day_idx, consumption in enumerate(consumptions):
-            records.append({
-                'customer_id': customer_id,
-                'day_index': day_idx,
-                'consumption_kwh': consumption
-            })
-    
-    df_long = pd.DataFrame(records)
-    
-    # Create labels series indexed by customer_id
-    labels_series = pd.Series(labels.values, index=customer_ids.values, name='label')
-    
-    logger.info(f"Long format shape: {df_long.shape}")
-    logger.info(f"Unique customers: {df_long['customer_id'].nunique()}")
-    logger.info(f"Days per customer: {len(consumption_cols)}")
-    
-    # Basic data quality checks
-    null_pct = (df_long['consumption_kwh'].isna().sum() / len(df_long)) * 100
-    logger.info(f"Null consumption values: {null_pct:.2f}%")
-    
-    zero_pct = ((df_long['consumption_kwh'] == 0).sum() / len(df_long)) * 100
-    logger.info(f"Zero consumption values: {zero_pct:.2f}%")
-    
-    return df_long, labels_series
+        values.columns = range(len(day_columns))
+
+    wide = values.astype("float32")
+    wide.index = pd.Index(customer_ids.values, name="customer_id")
+
+    # The public SGCC dump contains a handful of duplicated customer rows.
+    duplicated = wide.index.duplicated(keep="first")
+    if duplicated.any():
+        logger.warning("Dropping %d duplicated customer rows", int(duplicated.sum()))
+    wide = wide.loc[~duplicated]
+    label_series = pd.Series(labels.values[~duplicated], index=wide.index, name="label")
+
+    logger.info(
+        "Loaded %d customers x %d days (%.1f%% missing, %.1f%% theft)",
+        wide.shape[0], wide.shape[1], 100 * float(wide.isna().to_numpy().mean()),
+        100 * float(label_series.mean()),
+    )
+    return wide, label_series
+
+
+def wide_to_long(wide: pd.DataFrame) -> pd.DataFrame:
+    """Convert a wide matrix to long format [customer_id, day_index, consumption_kwh]."""
+    n_customers, n_days = wide.shape
+    return pd.DataFrame({
+        "customer_id": np.repeat(wide.index.astype(str).to_numpy(), n_days),
+        "day_index": np.tile(np.arange(n_days, dtype=np.int32), n_customers),
+        "consumption_kwh": wide.to_numpy(dtype=np.float64).ravel(),
+    })
+
+
+def long_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
+    """Pivot long format back to a wide matrix ordered by day_index, keeping customer order."""
+    customer_order = pd.unique(df_long["customer_id"])
+    wide = df_long.pivot_table(
+        index="customer_id", columns="day_index", values="consumption_kwh",
+        aggfunc="first", dropna=False,
+    )
+    wide = wide.reindex(index=customer_order).sort_index(axis=1)
+    return wide.astype("float32")
+
+
+def load_raw(path: str) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Load the dataset in long format.
+
+    Returns:
+        (df_long, labels): ``df_long`` has columns [customer_id, day_index,
+        consumption_kwh] with day_index in chronological order; ``labels`` is
+        indexed by customer id.
+    """
+    wide, labels = load_wide(path)
+    return wide_to_long(wide), labels
 
 
 def load_processed_features(path: str = "artifacts/features.csv") -> Tuple[pd.DataFrame, pd.Series]:
-    """
-    Load pre-computed features from CSV.
-    
-    Args:
-        path: Path to features CSV file
-    
-    Returns:
-        Tuple of (X, y) where X is features DataFrame and y is labels Series
-    """
-    file_path = Path(path)
-    
-    if not file_path.exists():
+    """Load pre-computed features (index = customer id) and labels from CSV."""
+    if not Path(path).exists():
         raise FileNotFoundError(f"Features file not found: {path}")
-    
-    logger.info(f"Loading processed features from {path}...")
-    
-    df = pd.read_csv(path, index_col=None)
 
-    if len(df.columns) > 0:
-        first_column = df.columns[0]
-        if first_column.startswith("Unnamed") or first_column in {"customer_id", "index"}:
-            df = df.set_index(first_column)
-            df.index.name = None
-    
-    if 'label' not in df.columns:
+    df = pd.read_csv(path, index_col=0)
+    df.index = df.index.astype(str)
+    df.index.name = None
+    if "label" not in df.columns:
         raise ValueError("Features file must contain 'label' column")
-    
-    y = df['label'].astype('int32')
-    X = df.drop('label', axis=1)
-    
-    logger.info(f"Loaded features shape: {X.shape}")
-    logger.info(f"Features: {list(X.columns)}")
-    
+
+    y = df["label"].astype("int32")
+    X = df.drop(columns="label")
     return X, y
 
 
-def save_processed_features(
-    X: pd.DataFrame,
-    y: pd.Series,
-    path: str = "artifacts/features.csv"
-) -> None:
-    """
-    Save processed features to CSV.
-    
-    Args:
-        X: Features DataFrame
-        y: Labels Series
-        path: Output path for CSV file
-    """
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Combine features and labels
+def save_processed_features(X: pd.DataFrame, y: pd.Series, path: str = "artifacts/features.csv") -> None:
+    """Save features and labels to CSV, keeping the customer id index."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     df = X.copy()
-    
-    # Preserve the feature index so round-trips keep customer identifiers when present.
-    df['label'] = y
-
+    df["label"] = y
     df.to_csv(path, index=True)
-    logger.info(f"Saved features to {path}")
-
-
-if __name__ == "__main__":
-    # Test data loader
-    import sys
-    
-    if len(sys.argv) > 1:
-        data_path = sys.argv[1]
-    else:
-        data_path = "data/datasetsmall.csv"
-    
-    try:
-        df_long, labels = load_raw(data_path)
-        print("\n" + "="*80)
-        print("DATA LOADING SUCCESSFUL")
-        print("="*80)
-        print(f"\nLong format shape: {df_long.shape}")
-        print(f"\nFirst few rows:")
-        print(df_long.head(10))
-        print(f"\nLabels distribution:")
-        print(labels.value_counts())
-        print(f"\nConsumption statistics:")
-        print(df_long['consumption_kwh'].describe())
-    except Exception as e:
-        logger.error(f"Error loading data: {str(e)}")
-        raise
+    logger.info("Saved features to %s", path)

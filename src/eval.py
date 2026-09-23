@@ -1,380 +1,102 @@
 """
 SGCC Theft Detector - Evaluation Module
 
-Model evaluation, metrics computation, error analysis, and explainability.
+Hold-out metrics for the XGBoost model and for simple baselines.
 """
 
-import pandas as pd
-import numpy as np
 import json
-import joblib
 import logging
+import time
 from pathlib import Path
-from typing import Dict, Tuple, List, Optional
-import matplotlib.pyplot as plt
-import seaborn as sns
-import shap
-from sklearn.metrics import (
-    recall_score, precision_score, f1_score, accuracy_score,
-    roc_auc_score, confusion_matrix, classification_report,
-    matthews_corrcoef, roc_curve, precision_recall_curve
-)
-from imblearn.metrics import geometric_mean_score
-import warnings
+from typing import Dict
 
-warnings.filterwarnings('ignore')
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score, average_precision_score, confusion_matrix, f1_score,
+    matthews_corrcoef, precision_score, recall_score, roc_auc_score,
+)
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
 
-def evaluate_model(
-    model,
-    X_test: pd.DataFrame,
-    y_test: pd.Series,
-    threshold: float = 0.5
-) -> Dict:
-    """
-    Evaluate model performance on test set.
-    
-    Args:
-        model: Trained model
-        X_test: Test features
-        y_test: Test labels
-        threshold: Classification threshold (default: 0.5)
-    
-    Returns:
-        Dictionary containing all evaluation metrics
-    """
-    logger.info("Evaluating model on test set...")
-    
-    # Predictions
-    y_pred_proba = model.predict_proba(X_test)[:, 1]
-    y_pred = (y_pred_proba >= threshold).astype(int)
-    
-    # Calculate metrics
-    metrics = {
-        'threshold': threshold,
-        'recall': float(recall_score(y_test, y_pred, zero_division=0)),
-        'precision': float(precision_score(y_test, y_pred, zero_division=0)),
-        'f1': float(f1_score(y_test, y_pred, zero_division=0)),
-        'accuracy': float(accuracy_score(y_test, y_pred)),
-        'auc': float(roc_auc_score(y_test, y_pred_proba)),
-        'gmean': float(geometric_mean_score(y_test, y_pred)),
-        'mcc': float(matthews_corrcoef(y_test, y_pred))
+def classification_metrics(y_true, proba, threshold: float = 0.5) -> Dict:
+    """Threshold and ranking metrics for binary probabilities."""
+    y_true = np.asarray(y_true).astype(int)
+    proba = np.asarray(proba, dtype=float)
+    y_pred = (proba >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    return {
+        "threshold": float(threshold),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "auc": float(roc_auc_score(y_true, proba)) if len(set(y_true)) > 1 else 0.0,
+        "pr_auc": float(average_precision_score(y_true, proba)) if y_true.any() else 0.0,
+        "gmean": float(np.sqrt(recall_score(y_true, y_pred, zero_division=0) * (tn / (tn + fp) if (tn + fp) else 0.0))),
+        "mcc": float(matthews_corrcoef(y_true, y_pred)),
+        "specificity": float(tn / (tn + fp)) if (tn + fp) else 0.0,
+        "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
+        "support": {"class_0": int((y_true == 0).sum()), "class_1": int((y_true == 1).sum())},
     }
-    
-    # Confusion matrix
-    cm = confusion_matrix(y_test, y_pred)
-    metrics['confusion_matrix'] = {
-        'tn': int(cm[0, 0]),
-        'fp': int(cm[0, 1]),
-        'fn': int(cm[1, 0]),
-        'tp': int(cm[1, 1])
-    }
-    
-    # Per-class support
-    metrics['support'] = {
-        'class_0': int((y_test == 0).sum()),
-        'class_1': int((y_test == 1).sum())
-    }
-    
-    # Calculate specificity and sensitivity
-    tn, fp, fn, tp = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
-    metrics['specificity'] = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
-    metrics['sensitivity'] = metrics['recall']  # Same as recall
-    
-    logger.info(f"Recall: {metrics['recall']:.4f}")
-    logger.info(f"Precision: {metrics['precision']:.4f}")
-    logger.info(f"F1: {metrics['f1']:.4f}")
-    logger.info(f"AUC: {metrics['auc']:.4f}")
-    logger.info(f"G-Mean: {metrics['gmean']:.4f}")
-    logger.info(f"MCC: {metrics['mcc']:.4f}")
-    
+
+
+def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.Series, threshold: float = 0.5) -> Dict:
+    """Evaluate a fitted classifier on held-out data."""
+    metrics = classification_metrics(y_test, model.predict_proba(X_test)[:, 1], threshold)
+    logger.info(
+        "Test AUC %.4f | PR-AUC %.4f | recall %.4f | precision %.4f | F1 %.4f @ %.3f",
+        metrics["auc"], metrics["pr_auc"], metrics["recall"], metrics["precision"], metrics["f1"], threshold,
+    )
     return metrics
 
 
-def save_metrics(
-    metrics: Dict,
-    output_path: str = "artifacts/metrics.json"
-) -> None:
-    """
-    Save evaluation metrics to JSON file.
-    
-    Args:
-        metrics: Dictionary of metrics
-        output_path: Path to save JSON file
-    """
-    output_file = Path(output_path)
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    with open(output_file, 'w') as f:
-        json.dump(metrics, f, indent=2)
-    
-    logger.info(f"Saved metrics to {output_path}")
+def feature_importance(model, feature_names) -> pd.DataFrame:
+    """Gain-based importance, normalised to sum to 1, sorted descending."""
+    gain = model.get_booster().get_score(importance_type="gain")
+    values = np.array([gain.get(name, 0.0) for name in feature_names], dtype=float)
+    total = values.sum()
+    return (
+        pd.DataFrame({"feature": list(feature_names), "importance": values / total if total else values})
+        .sort_values("importance", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
-def save_feature_importance(
-    model,
-    feature_names: List[str],
-    output_path: str = "artifacts/feature_importance.csv"
-) -> pd.DataFrame:
-    """
-    Save feature importance to CSV.
-    
-    Args:
-        model: Trained model
-        feature_names: List of feature names
-        output_path: Path to save CSV file
-    
-    Returns:
-        DataFrame with feature importance
-    """
-    importance = model.feature_importances_
-    
-    df_importance = pd.DataFrame({
-        'feature': feature_names,
-        'importance': importance
-    }).sort_values('importance', ascending=False)
-    
-    output_file = Path(output_path)
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    df_importance.to_csv(output_file, index=False)
-    logger.info(f"Saved feature importance to {output_path}")
-    
-    return df_importance
-
-
-def error_analysis(
-    X_test: pd.DataFrame,
-    y_test: pd.Series,
-    y_pred: np.ndarray,
-    max_samples: int = 100
-) -> Dict:
-    """
-    Perform error analysis and save false positive/negative samples.
-    
-    Args:
-        X_test: Test features with customer_id index
-        y_test: True labels
-        y_pred: Predicted labels
-        max_samples: Maximum number of error samples to save
-    
-    Returns:
-        Dictionary with error analysis results
-    """
-    logger.info("Performing error analysis...")
-    
-    # Get error indices
-    errors = y_test != y_pred
-    
-    # False positives (predicted 1, actually 0)
-    fp_mask = (y_pred == 1) & (y_test == 0)
-    fp_ids = X_test.index[fp_mask].tolist()[:max_samples]
-    
-    # False negatives (predicted 0, actually 1)
-    fn_mask = (y_pred == 0) & (y_test == 1)
-    fn_ids = X_test.index[fn_mask].tolist()[:max_samples]
-    
-    logger.info(f"False positives: {len(fp_ids)} (saved: {min(len(fp_ids), max_samples)})")
-    logger.info(f"False negatives: {len(fn_ids)} (saved: {min(len(fn_ids), max_samples)})")
-    
-    # Save error samples
-    Path("artifacts").mkdir(parents=True, exist_ok=True)
-    
-    with open("artifacts/fp_ids.json", 'w') as f:
-        json.dump(fp_ids, f, indent=2)
-    
-    with open("artifacts/fn_ids.json", 'w') as f:
-        json.dump(fn_ids, f, indent=2)
-    
-    logger.info("Saved error samples to artifacts/")
-    
-    return {
-        'total_errors': int(errors.sum()),
-        'false_positives': len(fp_ids),
-        'false_negatives': len(fn_ids),
-        'fp_ids': fp_ids,
-        'fn_ids': fn_ids
+def evaluate_baselines(X_train, y_train, X_test, y_test, random_state: int = 42) -> Dict[str, Dict]:
+    """Fit simple reference models on the same split and report hold-out metrics at threshold 0.5."""
+    models = {
+        "logistic_regression": make_pipeline(
+            SimpleImputer(strategy="median"), StandardScaler(),
+            LogisticRegression(class_weight="balanced", max_iter=2000),
+        ),
+        "random_forest": make_pipeline(
+            SimpleImputer(strategy="median"),
+            RandomForestClassifier(
+                n_estimators=400, min_samples_leaf=2, class_weight="balanced_subsample",
+                n_jobs=-1, random_state=random_state,
+            ),
+        ),
     }
+    results = {}
+    for name, model in models.items():
+        start = time.perf_counter()
+        model.fit(X_train, y_train)
+        metrics = classification_metrics(y_test, model.predict_proba(X_test)[:, 1])
+        metrics["training_time"] = round(time.perf_counter() - start, 2)
+        results[name] = metrics
+        logger.info("Baseline %s: AUC %.4f PR-AUC %.4f", name, metrics["auc"], metrics["pr_auc"])
+    return results
 
 
-def generate_shap_explanations(
-    model,
-    X_train: pd.DataFrame,
-    X_test: pd.DataFrame,
-    max_samples: int = 1000,
-    output_dir: str = "artifacts"
-) -> Tuple[shap.TreeExplainer, np.ndarray]:
-    """
-    Generate SHAP explanations for model predictions.
-    
-    Args:
-        model: Trained model
-        X_train: Training data for background (can be sample)
-        X_test: Test data to explain
-        max_samples: Maximum samples for SHAP summary
-        output_dir: Directory to save SHAP artifacts
-    
-    Returns:
-        Tuple of (explainer, shap_values)
-    """
-    logger.info("Generating SHAP explanations...")
-    
-    # Create explainer
-    explainer = shap.TreeExplainer(model)
-    
-    # Calculate SHAP values (limit to max_samples)
-    X_explain = X_test.iloc[:max_samples] if len(X_test) > max_samples else X_test
-    shap_values = explainer.shap_values(X_explain)
-    
-    logger.info(f"Computed SHAP values for {len(X_explain)} samples")
-    
-    # Save SHAP values
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    np.save(f"{output_dir}/shap_values.npy", shap_values)
-    logger.info(f"Saved SHAP values to {output_dir}/shap_values.npy")
-    
-    # Generate and save summary plot
-    plt.figure(figsize=(12, 8))
-    shap.summary_plot(
-        shap_values, X_explain,
-        show=False,
-        plot_type='bar'
-    )
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/shap_summary.png", dpi=150, bbox_inches='tight')
-    plt.close()
-    logger.info(f"Saved SHAP summary plot to {output_dir}/shap_summary.png")
-    
-    # Generate beeswarm plot
-    plt.figure(figsize=(12, 10))
-    shap.summary_plot(
-        shap_values, X_explain,
-        show=False
-    )
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/shap_beeswarm.png", dpi=150, bbox_inches='tight')
-    plt.close()
-    logger.info(f"Saved SHAP beeswarm plot to {output_dir}/shap_beeswarm.png")
-    
-    return explainer, shap_values
-
-
-def plot_confusion_matrix(
-    y_test: pd.Series,
-    y_pred: np.ndarray,
-    output_path: str = "artifacts/confusion_matrix.png"
-) -> None:
-    """
-    Plot and save confusion matrix.
-    
-    Args:
-        y_test: True labels
-        y_pred: Predicted labels
-        output_path: Path to save plot
-    """
-    cm = confusion_matrix(y_test, y_pred)
-    
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(
-        cm, annot=True, fmt='d', cmap='Blues',
-        xticklabels=['Honest', 'Theft'],
-        yticklabels=['Honest', 'Theft']
-    )
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-    plt.title('Confusion Matrix')
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    logger.info(f"Saved confusion matrix to {output_path}")
-
-
-def plot_roc_pr_curves(
-    y_test: pd.Series,
-    y_pred_proba: np.ndarray,
-    output_dir: str = "artifacts"
-) -> None:
-    """
-    Plot and save ROC and PR curves.
-    
-    Args:
-        y_test: True labels
-        y_pred_proba: Predicted probabilities
-        output_dir: Directory to save plots
-    """
-    # ROC curve
-    fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)
-    auc = roc_auc_score(y_test, y_pred_proba)
-    
-    plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, label=f'ROC (AUC = {auc:.4f})', linewidth=2)
-    plt.plot([0, 1], [0, 1], 'k--', label='Random')
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('ROC Curve')
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/roc_curve.png", dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    # Precision-Recall curve
-    precision, recall, thresholds = precision_recall_curve(y_test, y_pred_proba)
-    
-    plt.figure(figsize=(8, 6))
-    plt.plot(recall, precision, linewidth=2)
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/pr_curve.png", dpi=150, bbox_inches='tight')
-    plt.close()
-    
-    logger.info(f"Saved ROC and PR curves to {output_dir}/")
-
-
-if __name__ == "__main__":
-    # Test evaluation with saved model
-    import sys
-    from pathlib import Path
-    
-    sys.path.insert(0, str(Path(__file__).parent))
-    from modeling import load_model
-    
-    logger.info("Running evaluation on saved model...")
-    
-    try:
-        # Load model and test data
-        model = load_model("models/xgb_best.joblib")
-        test_data = joblib.load("artifacts/test_data.pkl")
-        X_test = test_data['X_test']
-        y_test = test_data['y_test']
-        
-        # Evaluate
-        metrics = evaluate_model(model, X_test, y_test)
-        save_metrics(metrics)
-        
-        # Feature importance
-        save_feature_importance(model, list(X_test.columns))
-        
-        # Error analysis
-        y_pred = model.predict(X_test)
-        error_analysis(X_test, y_test, y_pred)
-        
-        # SHAP
-        generate_shap_explanations(model, X_test[:100], X_test)
-        
-        # Plots
-        plot_confusion_matrix(y_test, y_pred)
-        y_pred_proba = model.predict_proba(X_test)[:, 1]
-        plot_roc_pr_curves(y_test, y_pred_proba)
-        
-        logger.info("Evaluation complete!")
-        
-    except FileNotFoundError as e:
-        logger.error(f"Required file not found: {str(e)}")
-        logger.error("Please run training first: python -m src.train")
+def save_json(payload: Dict, output_path: str) -> None:
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    logger.info("Saved %s", output_path)

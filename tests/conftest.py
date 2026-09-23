@@ -1,47 +1,41 @@
-"""
-Shared pytest fixtures.
+"""Shared pytest fixtures."""
 
-Data files are stored in Git LFS. A checkout without `git lfs pull` leaves
-small pointer files in their place, which still pass `Path.exists()`, so
-data-dependent tests must check the content, not just the path.
-"""
-
-import os
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
-
-
-def is_lfs_pointer(path: Path) -> bool:
-    """Return True if the file is an un-fetched Git LFS pointer."""
-    with open(path, "rb") as handle:
-        return handle.read(len(LFS_POINTER_PREFIX)) == LFS_POINTER_PREFIX
-
-
-def require_data_file(relative_path: str) -> Path:
-    """
-    Resolve a repo data file, skipping the test if it is missing or an LFS pointer.
-
-    Set REQUIRE_LFS=1 (as CI does) to fail instead of skip, so a broken LFS
-    fetch cannot silently turn into skipped tests.
-    """
-    path = REPO_ROOT / relative_path
-    if not path.exists():
-        reason = f"{relative_path} is missing"
-    elif is_lfs_pointer(path):
-        reason = f"{relative_path} is a Git LFS pointer; run `git lfs pull`"
-    else:
-        return path
-
-    if os.environ.get("REQUIRE_LFS") == "1":
-        pytest.fail(reason, pytrace=False)
-    pytest.skip(reason)
+DEMO_DATASET = REPO_ROOT / "data" / "sgcc_demo.csv.gz"
 
 
 @pytest.fixture(scope="session")
-def small_dataset_path() -> Path:
-    """Path to data/datasetsmall.csv, fetched from LFS."""
-    return require_data_file("data/datasetsmall.csv")
+def demo_dataset_path() -> Path:
+    """The held-out customer sample the API serves (committed to the repo)."""
+    assert DEMO_DATASET.is_file(), "data/sgcc_demo.csv.gz is missing; run python -m src.train"
+    return DEMO_DATASET
+
+
+@pytest.fixture
+def sgcc_csv(tmp_path) -> Path:
+    """
+    A small file in the raw SGCC layout: CONS_NO, FLAG, then date columns in
+    lexicographic (not chronological) order, as in the public dump.
+
+    Customer A consumes day-of-year kWh (strictly increasing); B is constant
+    until a mid-series drop to zero; C has a long gap.
+    """
+    dates = pd.date_range("2014-01-01", periods=120, freq="D")
+    values = {
+        "A": np.arange(1, 121, dtype=float),
+        "B": np.r_[np.full(60, 10.0), np.zeros(60)],
+        "C": np.r_[np.full(40, 5.0), np.full(40, np.nan), np.full(40, 5.0)],
+    }
+    frame = pd.DataFrame(values, index=[f"{d.year}/{d.month}/{d.day}" for d in dates]).T
+    frame = frame[sorted(frame.columns)]  # "2014/1/1", "2014/1/10", ...
+    frame.insert(0, "FLAG", [0, 1, 0])
+    frame.insert(0, "CONS_NO", frame.index)
+    path = tmp_path / "sgcc.csv"
+    frame.to_csv(path, index=False)
+    return path

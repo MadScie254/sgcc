@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getModelConfig, predictSingle } from "@/lib/api";
+import { getModelConfig, getModelMetrics, predictSingle } from "@/lib/api";
 import { CenteredState } from "@/components/CenteredState";
 import { CustomerPicker } from "@/components/CustomerPicker";
 import { Panel, Button, Input } from "@/components/ui/primitives";
 import { ShapDrivers } from "@/components/ShapDrivers";
-import { riskTierFromProbability, riskTierLabel, riskTierClasses } from "@/lib/dashboard";
+import { HIGH_RISK_PROBABILITY, riskTierFromProbability, riskTierLabel, riskTierClasses } from "@/lib/dashboard";
 
 type EntryMode = "lookup" | "manual";
 
@@ -14,11 +14,14 @@ export function PredictPage() {
   const [searchParams] = useSearchParams();
   const [mode, setMode] = useState<EntryMode>("lookup");
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(searchParams.get("customer"));
-  const [threshold, setThreshold] = useState(0.5);
+  const [threshold, setThreshold] = useState<number | null>(null);
   const [prediction, setPrediction] = useState<Awaited<ReturnType<typeof predictSingle>> | null>(null);
   const [manualValues, setManualValues] = useState<Record<string, string>>({});
 
   const configQuery = useQuery({ queryKey: ["model-config"], queryFn: getModelConfig, staleTime: 30_000 });
+  const metricsQuery = useQuery({ queryKey: ["model-metrics"], queryFn: getModelMetrics, staleTime: 30_000 });
+  // Start from the model's tuned decision threshold until the user moves the slider.
+  const effectiveThreshold = threshold ?? metricsQuery.data?.threshold ?? 0.5;
   const featureGroups = useMemo(() => Object.entries(configQuery.data?.feature_groups ?? {}), [configQuery.data]);
 
   useEffect(() => {
@@ -35,23 +38,27 @@ export function PredictPage() {
   async function runPrediction() {
     if (mode === "lookup") {
       if (!selectedCustomerId) return;
-      const response = await predictSingle({ customer_id: selectedCustomerId, threshold });
+      const response = await predictSingle({ customer_id: selectedCustomerId, threshold: effectiveThreshold });
       setPrediction(response);
       return;
     }
 
+    // Blank fields are omitted and treated as missing by the model, as in training.
     const payload: Record<string, number> = {};
     Object.entries(manualValues).forEach(([feature, value]) => {
       const numeric = Number.parseFloat(value);
-      payload[feature] = Number.isFinite(numeric) ? numeric : 0;
+      if (Number.isFinite(numeric)) {
+        payload[feature] = numeric;
+      }
     });
-    const response = await predictSingle({ features: payload, threshold });
+    const response = await predictSingle({ features: payload, threshold: effectiveThreshold });
     setPrediction(response);
   }
 
   const probability = prediction?.probability ?? null;
-  const derivedLabel = probability === null ? null : probability >= threshold ? 1 : 0;
-  const derivedTier = probability === null ? null : riskTierFromProbability(probability);
+  const highCutoff = Math.max(HIGH_RISK_PROBABILITY, effectiveThreshold);
+  const derivedLabel = probability === null ? null : probability >= effectiveThreshold ? 1 : 0;
+  const derivedTier = probability === null ? null : riskTierFromProbability(probability, effectiveThreshold);
 
   if (configQuery.isError) {
     return <CenteredState title="Model unavailable" description="The prediction form could not load the model configuration. Verify the API and trained artifacts." />;
@@ -113,7 +120,7 @@ export function PredictPage() {
                           inputMode="decimal"
                           value={manualValues[feature] ?? ""}
                           onChange={(event) => setManualValues((current) => ({ ...current, [feature]: event.target.value }))}
-                          placeholder="0.0"
+                          placeholder="missing"
                         />
                       </label>
                     ))}
@@ -127,14 +134,14 @@ export function PredictPage() {
             <div className="min-w-40 space-y-2">
               <div className="flex items-center justify-between text-xs uppercase tracking-[0.18em] text-secondary">
                 <span>Threshold</span>
-                <span className="font-mono text-primary">{threshold.toFixed(2)}</span>
+                <span className="font-mono text-primary">{effectiveThreshold.toFixed(2)}</span>
               </div>
               <input
                 type="range"
-                min="0.1"
-                max="0.9"
-                step="0.05"
-                value={threshold}
+                min="0.05"
+                max="0.95"
+                step="0.01"
+                value={effectiveThreshold}
                 onChange={(event) => setThreshold(Number(event.target.value))}
                 className="h-2 w-full cursor-pointer appearance-none rounded-full bg-surface-alt accent-accent"
               />
@@ -156,9 +163,9 @@ export function PredictPage() {
                 </div>
                 <div className="mt-4 rounded-full border border-border bg-surface-alt p-1">
                   <div className="relative h-3 overflow-hidden rounded-full">
-                    <div className="absolute inset-y-0 left-0 w-2/5 bg-success-bg" />
-                    <div className="absolute inset-y-0 left-2/5 w-[30%] bg-warning-bg" />
-                    <div className="absolute inset-y-0 right-0 w-[30%] bg-danger-bg" />
+                    <div className="absolute inset-y-0 left-0 bg-success-bg" style={{ width: `${effectiveThreshold * 100}%` }} />
+                    <div className="absolute inset-y-0 bg-warning-bg" style={{ left: `${effectiveThreshold * 100}%`, width: `${Math.max(highCutoff - effectiveThreshold, 0) * 100}%` }} />
+                    <div className="absolute inset-y-0 right-0 bg-danger-bg" style={{ width: `${(1 - highCutoff) * 100}%` }} />
                     <div
                       className="absolute top-[-4px] h-5 w-[2px] bg-primary"
                       style={{ left: `${(probability ?? 0) * 100}%`, transform: "translateX(-1px)" }}

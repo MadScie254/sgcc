@@ -6,8 +6,32 @@ const api = axios.create({
 
 export const apiClient = api;
 
+const API_KEY_STORAGE_KEY = "sgcc.apiKey";
+
+// The key is entered on the Settings page and kept in this browser only, so it
+// never ships inside the built JavaScript. VITE_API_KEY remains a local-dev fallback.
+export function getStoredApiKey(): string {
+  try {
+    return window.localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setStoredApiKey(value: string): void {
+  try {
+    if (value) {
+      window.localStorage.setItem(API_KEY_STORAGE_KEY, value);
+    } else {
+      window.localStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // Storage unavailable (private mode); the key lasts until reload.
+  }
+}
+
 api.interceptors.request.use((config) => {
-  const apiKey = import.meta.env.VITE_API_KEY;
+  const apiKey = getStoredApiKey() || import.meta.env.VITE_API_KEY;
   if (apiKey) {
     config.headers = config.headers ?? {};
     config.headers["X-API-Key"] = apiKey;
@@ -79,7 +103,7 @@ export interface CustomerTimeseriesResponse {
 
 export interface PredictionReason {
   feature: string;
-  value: number;
+  value: number | null;
   shap_value: number;
 }
 
@@ -111,14 +135,14 @@ export interface FeatureImportanceItem {
 export interface GlobalShapResponse {
   feature_names: string[];
   shap_values: number[][];
-  feature_values: number[][];
+  feature_values: Array<Array<number | null>>;
   sample_count: number;
 }
 
 export interface LocalShapResponse {
   customer_id: string;
   feature_names: string[];
-  feature_values: number[];
+  feature_values: Array<number | null>;
   shap_values: number[];
   base_value: number;
   probability: number;
@@ -189,6 +213,7 @@ export interface SinglePredictionResponse {
   prediction: number;
   probability: number;
   threshold: number;
+  risk_tier?: string | null;
   top_reasons: PredictionReason[];
 }
 
@@ -238,8 +263,8 @@ export interface AnalyticsDashboardResponse {
 }
 
 export interface TrainingJobCreateRequest {
-  mode: "quick" | "full" | "custom";
-  config_overrides?: Record<string, unknown>;
+  mode: "quick" | "full";
+  config_overrides?: { n_trials?: number; cv_folds?: number; timeout_seconds?: number; test_size?: number };
 }
 
 export interface TrainingJobStatusResponse {

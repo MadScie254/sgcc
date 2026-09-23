@@ -1,255 +1,163 @@
 """
-SGCC Theft Detector - Training Module
+SGCC Theft Detector - Training Pipeline
 
-End-to-end training pipeline: load data, engineer features, preprocess, train model.
+    python -m src.train            # full run (Optuna trials from config.yaml)
+    python -m src.train --quick    # smoke run on a sample with a few trials
+
+Steps: load data -> features -> stratified customer split -> Optuna tuning on
+the training split -> threshold from out-of-fold predictions -> final fit ->
+hold-out evaluation and baselines -> write model, metrics, and the demo
+dataset the API serves (a sample of held-out customers).
 """
 
-import pandas as pd
-import numpy as np
-import yaml
-import logging
-from pathlib import Path
-import sys
+import argparse
 import json
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+import pandas as pd
+import yaml
 from sklearn.model_selection import train_test_split
-import warnings
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent))
+from .data_loader import load_wide
+from .eval import evaluate_baselines, evaluate_model, feature_importance, save_json
+from .features import build_features_wide
+from .modeling import cross_val_proba, get_xgb_model, save_model, select_threshold, tune_xgb
 
-from data_loader import load_raw, save_processed_features
-from features import build_features, normalize_features
-from preprocessing import apply_smote_enn, save_preprocessing_report
-from modeling import get_xgb_model, train_xgb_with_optuna, save_model, save_optuna_study
-
-warnings.filterwarnings('ignore')
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parents[1]
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
-    """Load configuration from YAML file."""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
+    path = Path(config_path)
+    if not path.is_absolute() and not path.exists():
+        path = BASE_DIR / path
+    with open(path, "r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
 
 
-def train_pipeline(
-    config_path: str = "config.yaml",
-    quick_mode: bool = False
-) -> dict:
-    """
-    Run complete training pipeline.
-    
-    Args:
-        config_path: Path to configuration YAML file
-        quick_mode: If True, use quick training settings (smaller sample, fewer trials)
-    
-    Returns:
-        Dictionary containing training results and metrics
-    """
-    # Load configuration
-    logger.info("="*80)
-    logger.info("SGCC THEFT DETECTOR - TRAINING PIPELINE")
-    logger.info("="*80)
-    
+def _resolve(path: str) -> Path:
+    p = Path(path)
+    return p if p.is_absolute() else BASE_DIR / p
+
+
+def write_demo_dataset(wide: pd.DataFrame, labels: pd.Series, path: Path) -> None:
+    """Write customers in the SGCC layout (CONS_NO, FLAG, one column per date)."""
+    frame = wide.copy()
+    if isinstance(frame.columns, pd.DatetimeIndex):
+        frame.columns = frame.columns.strftime("%Y-%m-%d")
+    frame.insert(0, "FLAG", labels.reindex(frame.index).astype(int).values)
+    frame.insert(0, "CONS_NO", frame.index.astype(str))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False, float_format="%.6g", compression={"method": "gzip", "mtime": 0})
+    logger.info("Wrote %d demo customers to %s (%.1f MB)", len(frame), path, path.stat().st_size / 1e6)
+
+
+def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
+                   data_path: Optional[str] = None) -> Dict[str, Any]:
     config = load_config(config_path)
-    random_state = config['random_state']
-    
+    random_state = int(config["random_state"])
+    data_cfg, model_cfg, eval_cfg = config["data"], config["model"], config["evaluation"]
+    paths = {key: _resolve(value) for key, value in config["paths"].items()}
+
+    # 1. Data
+    source = _resolve(data_path or data_cfg["training_data_path"])
+    if not source.exists():
+        raise FileNotFoundError(f"Training data not found: {source}. Run: python scripts/download_data.py")
+    wide, labels = load_wide(str(source))
+
     if quick_mode:
-        logger.info("[QUICK MODE ENABLED] Using reduced dataset and fewer trials")
-    
-    # Step 1: Load raw data
-    logger.info("\n[STEP 1/7] Loading raw data...")
-    data_path = config['data']['raw_data_path']
-    
-    try:
-        df_long, labels = load_raw(data_path)
-    except FileNotFoundError:
-        logger.error(f"Data file not found: {data_path}")
-        logger.error("Please download the dataset first using: bash scripts/download_data.sh")
-        raise
-    
-    # Quick mode: sample data
-    if quick_mode:
-        sample_frac = config['model']['quick_train']['sample_fraction']
-        logger.info(f"Sampling {sample_frac*100}% of data for quick training...")
-        
-        # Sample customers
-        unique_customers = df_long['customer_id'].unique()
-        n_sample = int(len(unique_customers) * sample_frac)
-        sampled_customers = np.random.choice(unique_customers, size=n_sample, replace=False)
-        
-        df_long = df_long[df_long['customer_id'].isin(sampled_customers)]
-        labels = labels.loc[sampled_customers]
-        
-        logger.info(f"Sampled {len(sampled_customers)} customers")
-    
-    # Step 2: Build features (or load cached)
-    features_path = config['data']['processed_features_path']
-    features_file = Path(features_path)
-    
-    if features_file.exists() and not quick_mode:
-        logger.info("\n[STEP 2/7] Loading cached features from previous run...")
-        logger.info(f"Reading from: {features_path}")
-        cached_df = pd.read_csv(features_path)
-        
-        # Split into X and y
-        y = cached_df['label']
-        X = cached_df.drop(columns=['label'])
-        
-        logger.info(f"Loaded {len(X)} samples with {len(X.columns)} features")
-        logger.info(f"Features: {X.columns.tolist()}")
-    else:
-        logger.info("\n[STEP 2/7] Engineering features...")
-        feature_config = {
-            'sudden_drop_threshold': config['features']['sudden_drop_threshold'],
-            'peak_day_percentile': config['features']['peak_day_percentile'],
-            'missing_sequence_threshold': config['features']['missing_sequence_threshold']
-        }
-        
-        X, y = build_features(df_long, labels, config=feature_config)
-        
-        # Save features
-        logger.info("Saving processed features...")
-        save_processed_features(X, y, config['data']['processed_features_path'])
-    
-    # Step 3: Train-test split
-    logger.info("\n[STEP 3/7] Splitting data into train and test sets...")
-    test_size = config['evaluation']['test_size']
-    
+        fraction = float(model_cfg["quick_train"]["sample_fraction"])
+        keep, _ = train_test_split(labels.index, train_size=fraction, stratify=labels, random_state=random_state)
+        wide, labels = wide.loc[keep], labels.loc[keep]
+        logger.info("Quick mode: sampled %d customers", len(labels))
+
+    # 2. Features
+    X = build_features_wide(wide, config.get("features"))
+    y = labels.reindex(X.index).astype(int)
+    logger.info("Feature matrix: %d customers x %d features", *X.shape)
+
+    # 3. Split by customer
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=test_size,
-        stratify=y,
-        random_state=random_state
+        X, y, test_size=float(eval_cfg["test_size"]), stratify=y, random_state=random_state,
     )
-    
-    logger.info(f"Train set: {X_train.shape[0]} samples")
-    logger.info(f"Test set: {X_test.shape[0]} samples")
-    logger.info(f"Train label distribution:\n{y_train.value_counts()}")
-    logger.info(f"Test label distribution:\n{y_test.value_counts()}")
-    
-    smote_config = config['preprocessing']['smote_enn']
 
-    # Step 4: Train model with Optuna
-    logger.info("\n[STEP 4/7] Training XGBoost with Optuna optimization on the original split...")
-    
-    if quick_mode:
-        n_trials = config['model']['quick_train']['n_trials']
-        cv_folds = config['model']['quick_train']['cv_folds']
-    else:
-        n_trials = config['model']['optuna']['n_trials']
-        cv_folds = config['model']['optuna']['cv_folds']
-    
-    scoring_weights = config['model']['optuna']['scoring_weights']
-    
-    best_params, study = train_xgb_with_optuna(
+    # 4. Tune
+    tuning = model_cfg["quick_train"] if quick_mode else model_cfg["optuna"]
+    optuna_cfg = model_cfg["optuna"]
+    best_params, study = tune_xgb(
         X_train, y_train,
-        n_trials=n_trials,
-        cv=cv_folds,
+        n_trials=int(tuning["n_trials"]),
+        cv=int(tuning["cv_folds"]),
         random_state=random_state,
-        smote_enn_params=smote_config,
-        recall_weight=scoring_weights['recall'],
-        precision_weight=scoring_weights['precision'],
-        f1_weight=scoring_weights['f1'],
-        timeout=config['model']['optuna']['timeout']
-    )
-    
-    # Step 5: Apply SMOTE+ENN for the final fit
-    logger.info("\n[STEP 5/7] Applying SMOTE+ENN for the final model fit...")
-    X_train_res, y_train_res, preprocess_report = apply_smote_enn(
-        X_train, y_train,
-        random_state=random_state,
-        smote_k_neighbors=smote_config['smote']['k_neighbors'],
-        enn_n_neighbors=smote_config['enn']['n_neighbors'],
-        sampling_strategy=smote_config['smote']['sampling_strategy']
+        search_space=optuna_cfg.get("search_space"),
+        metric=optuna_cfg.get("metric", "average_precision"),
+        timeout=optuna_cfg.get("timeout"),
     )
 
-    # Save preprocessing report
-    save_preprocessing_report(preprocess_report)
-
-    # Step 6: Normalize features and fit the final model
-    logger.info("\n[STEP 6/7] Normalizing features and fitting the final model...")
-    X_train_scaled, X_test_scaled = normalize_features(
-        X_train_res, X_test,
-        scaler_path="artifacts/scaler.joblib"
+    # 5. Threshold from out-of-fold predictions on the training split
+    oof = cross_val_proba(best_params, X_train, y_train, cv=int(tuning["cv_folds"]), random_state=random_state)
+    threshold = select_threshold(
+        y_train, oof,
+        strategy=eval_cfg.get("threshold_strategy", "f1"),
+        min_precision=float(eval_cfg.get("min_precision", 0.5)),
     )
-    assert X_test_scaled is not None
+    logger.info("Decision threshold: %.4f", threshold)
 
-    final_model = get_xgb_model(best_params)
-    final_model.fit(X_train_scaled, y_train_res, verbose=False)
+    # 6. Final fit and hold-out evaluation
+    model = get_xgb_model(best_params, random_state=random_state)
+    model.fit(X_train, y_train)
+    metrics = evaluate_model(model, X_test, y_test, threshold=threshold)
+    metrics.update({
+        "model_version": str(model_cfg.get("version", "unknown")),
+        "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "quick_mode": quick_mode,
+        "cv_best_score": float(study.best_value),
+        "cv_metric": optuna_cfg.get("metric", "average_precision"),
+        "n_trials": len(study.trials),
+        "train_customers": int(len(X_train)),
+        "test_customers": int(len(X_test)),
+        "n_features": int(X.shape[1]),
+    })
 
-    # Step 7: Save model and study
-    logger.info("\n[STEP 7/7] Saving model and artifacts...")
-    model = final_model
-    save_model(model, "models/xgb_best.joblib")
-    save_optuna_study(study, "artifacts/optuna_study.pkl")
-    
-    # Save best parameters
-    params_file = Path("artifacts/best_params.json")
-    params_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(params_file, 'w') as f:
-        json.dump(best_params, f, indent=2)
-    logger.info(f"Saved best parameters to {params_file}")
-    
-    # Save feature names
-    feature_names_file = Path("artifacts/feature_names.json")
-    with open(feature_names_file, 'w') as f:
-        json.dump(list(X.columns), f, indent=2)
-    logger.info(f"Saved feature names to {feature_names_file}")
-    
-    # Return results
-    results = {
-        'best_score': study.best_value,
-        'best_params': best_params,
-        'n_trials': n_trials,
-        'train_samples': len(X_train_scaled),
-        'test_samples': len(X_test_scaled),
-        'n_features': X_train_scaled.shape[1],
-        'preprocessing_report': preprocess_report
+    # 7. Persist artifacts
+    save_model(model, str(paths["model_file"]))
+    save_json(metrics, str(paths["artifacts"] / "metrics.json"))
+    save_json(best_params, str(paths["artifacts"] / "best_params.json"))
+    feature_importance(model, X.columns).to_csv(paths["artifacts"] / "feature_importance.csv", index=False)
+
+    baselines = evaluate_baselines(X_train, y_train, X_test, y_test, random_state=random_state)
+    save_json(baselines, str(paths["models"] / "baselines" / "comparison_results.json"))
+
+    demo_size = min(int(config["serving"]["demo_customers"]), len(X_test))
+    demo_ids, _ = train_test_split(
+        X_test.index, train_size=demo_size, stratify=y_test, random_state=random_state,
+    ) if demo_size < len(X_test) else (X_test.index, None)
+    write_demo_dataset(wide.loc[demo_ids], labels, _resolve(data_cfg["serving_data_path"]))
+
+    return {
+        "best_score": float(study.best_value),
+        "best_params": best_params,
+        "threshold": threshold,
+        "test_metrics": {k: metrics[k] for k in ("auc", "pr_auc", "recall", "precision", "f1")},
+        "baselines": {name: {k: m[k] for k in ("auc", "pr_auc")} for name, m in baselines.items()},
     }
-    
-    logger.info("\n" + "="*80)
-    logger.info("TRAINING COMPLETE")
-    logger.info("="*80)
-    logger.info(f"Best composite score: {results['best_score']:.4f}")
-    logger.info(f"Model saved to: models/xgb_best.joblib")
-    logger.info(f"Artifacts saved to: artifacts/")
-    logger.info("="*80)
-    
-    # Save test data for evaluation
-    test_data = {
-        'X_test': X_test_scaled,
-        'y_test': y_test
-    }
-    import joblib
-    joblib.dump(test_data, "artifacts/test_data.pkl")
-    logger.info("Saved test data for evaluation")
-    
-    return results
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train the SGCC theft detector")
+    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--data", default=None, help="Override data.training_data_path")
+    parser.add_argument("--quick", action="store_true", help="Sample customers and run few trials")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    results = train_pipeline(config_path=args.config, quick_mode=args.quick, data_path=args.data)
+    print(json.dumps(results, indent=2, default=float))
 
 
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Train SGCC Theft Detector')
-    parser.add_argument('--config', type=str, default='config.yaml', help='Path to config file')
-    parser.add_argument('--quick', action='store_true', help='Enable quick training mode')
-    
-    args = parser.parse_args()
-    
-    try:
-        results = train_pipeline(
-            config_path=args.config,
-            quick_mode=args.quick
-        )
-    except Exception as e:
-        logger.error(f"Training failed: {str(e)}")
-        raise
+    main()

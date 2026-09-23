@@ -1,191 +1,109 @@
-"""
-Unit tests for features module.
-"""
+"""Tests for src.features."""
 
-import pytest
-import pandas as pd
 import numpy as np
-from pathlib import Path
-import sys
+import pandas as pd
+import pytest
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
-
-from features import (
-    compute_statistical_features,
-    compute_trend_features,
-    compute_anomaly_features,
-    compute_temporal_features,
-    compute_other_features,
+from src.data_loader import load_wide
+from src.features import (
     build_features,
-    normalize_features
+    build_features_wide,
+    compute_anomaly_features,
+    compute_other_features,
+    compute_statistical_features,
+    compute_temporal_features,
+    compute_trend_features,
 )
 
 
 def test_statistical_features():
-    """Test statistical feature computation."""
-    consumption = np.array([10, 20, 15, 25, 30, 0, 35, 40])
-    
-    features = compute_statistical_features(consumption)
-    
-    assert 'mean' in features
-    assert 'median' in features
-    assert 'std' in features
-    assert 'coef_var' in features
-    assert 'min' in features
-    assert 'max' in features
-    assert 'range' in features
-    assert 'skewness' in features
-    
-    # Check reasonable values
-    assert features['mean'] > 0
-    assert features['min'] == 0
-    assert features['max'] == 40
-    assert features['range'] == 40
+    features = compute_statistical_features(np.array([10, 20, 15, 25, 30, 0, 35, 40], dtype=float))
+    assert features["min"] == 0
+    assert features["max"] == 40
+    assert features["range"] == 40
+    assert features["mean"] == pytest.approx(21.875)
 
 
-def test_trend_features():
-    """Test trend feature computation."""
-    # Linear increasing trend
-    consumption = np.array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
-    
-    features = compute_trend_features(consumption)
-    
-    assert 'slope_full' in features
-    assert 'slope_last_30d' in features
-    assert 'slope_last_90d' in features
-    
-    # Should detect positive slope
-    assert features['slope_full'] > 0
+def test_trend_features_detect_increase():
+    features = compute_trend_features(np.arange(100, dtype=float) * 2)
+    assert features["slope_full"] == pytest.approx(2.0)
+    assert features["slope_last_30d"] == pytest.approx(2.0)
 
 
 def test_anomaly_features():
-    """Test anomaly feature computation."""
-    # Series with zero days and sudden drop
-    consumption = np.array([50, 50, 0, 0, 50, 20, 10, 50, 50])  # sudden drop from 50 to 20
-    
-    features = compute_anomaly_features(consumption, sudden_drop_threshold=0.5)
-    
-    assert 'zero_day_count' in features
-    assert 'sudden_drop_count' in features
-    assert 'volatility_index' in features
-    
-    # Should detect 2 zero days
-    assert features['zero_day_count'] == 2
-    
-    # Should detect at least one sudden drop
-    assert features['sudden_drop_count'] >= 1
+    features = compute_anomaly_features(np.array([10, 10, 2, 10, 0, 0, 10], dtype=float))
+    assert features["zero_day_count"] == 2
+    assert features["sudden_drop_count"] == 2  # 10 -> 2 and 10 -> 0
 
 
 def test_temporal_features():
-    """Test temporal feature computation."""
-    consumption = np.random.rand(100) * 50  # 100 days of data
-    
-    features = compute_temporal_features(consumption)
-    
-    assert 'weekday_vs_weekend_ratio' in features
-    assert 'peak_day_ratio' in features
-    
-    # Ratio should be positive
-    assert features['weekday_vs_weekend_ratio'] > 0
-    
-    # Peak ratio should be between 0 and 1
-    assert 0 <= features['peak_day_ratio'] <= 1
+    features = compute_temporal_features(np.tile([10, 10, 10, 10, 10, 5, 5], 4).astype(float))
+    assert features["weekday_vs_weekend_ratio"] == pytest.approx(2.0)
+    assert 0 <= features["peak_day_ratio"] <= 1
 
 
-def test_other_features():
-    """Test other features (autocorr, missing sequences)."""
-    consumption = np.array([10, 20, 30, np.nan, np.nan, np.nan, np.nan, 40, 50])
-    
-    features = compute_other_features(consumption)
-    
-    assert 'autocorr_lag1' in features
-    assert 'missing_sequences_count' in features
-    
-    # Should detect one missing sequence (4 consecutive NaN)
-    assert features['missing_sequences_count'] >= 1
+def test_other_features_counts_missing_runs():
+    consumption = np.array([1, 2, np.nan, np.nan, np.nan, np.nan, 3, 4, np.nan, 5], dtype=float)
+    assert compute_other_features(consumption)["missing_sequences_count"] == 1
 
 
-def test_normalize_features(tmp_path):
-    """Test feature normalization."""
-    # Create synthetic features
-    X_train = pd.DataFrame({
-        'feature1': [0, 50, 100],
-        'feature2': [10, 20, 30],
-        'feature3': [0.1, 0.5, 1.0]
-    })
-    
-    X_test = pd.DataFrame({
-        'feature1': [25, 75],
-        'feature2': [15, 25],
-        'feature3': [0.3, 0.7]
-    })
-    
-    scaler_path = tmp_path / "test_scaler.joblib"
-    
-    X_train_scaled, X_test_scaled = normalize_features(
-        X_train, X_test, str(scaler_path)
-    )
-    
-    # Check scaler was saved
-    assert scaler_path.exists()
-    
-    # Check scaled data is between 0 and 1
-    assert (X_train_scaled >= 0).all().all()
-    assert (X_train_scaled <= 1).all().all()
-    assert (X_test_scaled >= 0).all().all()
-    assert (X_test_scaled <= 1).all().all()
-    
-    # Check min/max in training data
-    assert X_train_scaled['feature1'].min() == 0
-    assert X_train_scaled['feature1'].max() == 1
+def test_build_features_wide_matches_single_series_helpers(sgcc_csv):
+    wide, _ = load_wide(str(sgcc_csv))
+    X = build_features_wide(wide)
+
+    assert list(X.index) == ["A", "B", "C"]
+    assert X.loc["A", "slope_full"] == pytest.approx(1.0, rel=1e-5)
+    assert X.loc["B", "zero_day_count"] == 60
+    assert X.loc["B", "longest_zero_run"] == 60
+    assert X.loc["B", "sudden_drop_count"] == 1
+    assert X.loc["C", "longest_missing_run"] == 40
+    assert X.loc["C", "missing_ratio"] == pytest.approx(40 / 120)
+    # Monthly profile: B's latest month is all zeros relative to its mean.
+    assert X.loc["B", "month_lag_00"] == 0
+    for name in ("mean", "std", "zero_day_count", "sudden_drop_count"):
+        single = {**compute_statistical_features(wide.loc["B"].to_numpy(float)),
+                  **compute_anomaly_features(wide.loc["B"].to_numpy(float))}
+        assert X.loc["B", name] == pytest.approx(single[name], rel=1e-5)
 
 
-def test_build_features_mock():
-    """Test build_features with mock data."""
-    # Create mock long-format data
+def test_build_features_wide_handles_empty_customer():
+    wide = pd.DataFrame([[np.nan] * 60, list(range(60))], index=["empty", "ok"],
+                        columns=pd.date_range("2014-01-01", periods=60), dtype="float32")
+    X = build_features_wide(wide)
+
+    assert X.loc["empty", "missing_ratio"] == 1.0
+    assert not np.isinf(X.to_numpy()).any()
+
+
+def test_build_features_from_long_format():
+    rng = np.random.default_rng(0)
     df_long = pd.DataFrame({
-        'customer_id': ['C1'] * 100 + ['C2'] * 100,
-        'day_index': list(range(100)) * 2,
-        'consumption_kwh': np.random.rand(200) * 50
+        "customer_id": ["C1"] * 100 + ["C2"] * 100,
+        "day_index": list(range(100)) * 2,
+        "consumption_kwh": rng.random(200) * 50,
     })
-    
-    labels = pd.Series([0, 1], index=['C1', 'C2'], name='label')
-    
+    labels = pd.Series([0, 1], index=["C1", "C2"], name="label")
+
     X, y = build_features(df_long, labels)
-    
-    # Check structure
-    assert isinstance(X, pd.DataFrame)
-    assert isinstance(y, pd.Series)
-    assert len(X) == 2  # 2 customers
-    assert len(y) == 2
-    
-    # Check index alignment
-    assert (X.index == y.index).all()
-    
-    # Check feature count (should have multiple features)
-    assert X.shape[1] >= 10
+
+    assert list(X.index) == ["C1", "C2"]
+    assert y.tolist() == [0, 1]
+    assert X.shape[1] >= 50
 
 
 def test_build_features_interleaved_rows():
     """Rows interleaved across customers give the same features as contiguous rows."""
     rng = np.random.default_rng(0)
     contiguous = pd.DataFrame({
-        'customer_id': ['C1'] * 60 + ['C2'] * 60 + ['C3'] * 60,
-        'day_index': list(range(60)) * 3,
-        'consumption_kwh': rng.random(180) * 50
+        "customer_id": ["C1"] * 60 + ["C2"] * 60 + ["C3"] * 60,
+        "day_index": list(range(60)) * 3,
+        "consumption_kwh": rng.random(180) * 50,
     })
-    # Day-major order: C1 d0, C2 d0, C3 d0, C1 d1, ...
-    interleaved = contiguous.sort_values(['day_index', 'customer_id'], kind='stable')
-    labels = pd.Series([0, 1, 0], index=['C1', 'C2', 'C3'], name='label')
+    interleaved = contiguous.sort_values(["day_index", "customer_id"], kind="stable")
+    labels = pd.Series([0, 1, 0], index=["C1", "C2", "C3"], name="label")
 
     X_contiguous, y_contiguous = build_features(contiguous, labels)
     X_interleaved, y_interleaved = build_features(interleaved, labels)
 
-    assert list(X_interleaved.index) == ['C1', 'C2', 'C3']
     pd.testing.assert_frame_equal(X_contiguous, X_interleaved)
     pd.testing.assert_series_equal(y_contiguous, y_interleaved)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

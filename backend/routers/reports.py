@@ -12,8 +12,8 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 def create_report(request: ReportRequest) -> ReportResponse:
     try:
         return ReportResponse(**generate_report(request.dataset_id, request.country_code, request.latitude, request.longitude))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/latest", response_model=list[dict])

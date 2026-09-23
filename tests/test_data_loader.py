@@ -1,111 +1,72 @@
-"""
-Unit tests for data_loader module.
-"""
+"""Tests for src.data_loader."""
 
-import pytest
-import pandas as pd
 import numpy as np
-from pathlib import Path
-import sys
+import pandas as pd
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
-
-from data_loader import load_raw, save_processed_features, load_processed_features
+from src.data_loader import load_processed_features, load_raw, load_wide, save_processed_features
 
 
-@pytest.fixture(scope="module")
-def small_dataset(small_dataset_path):
-    """Load datasetsmall.csv once for all tests in this module."""
-    return load_raw(str(small_dataset_path))
+def test_load_wide_sorts_date_columns_chronologically(sgcc_csv):
+    wide, labels = load_wide(str(sgcc_csv))
+
+    assert isinstance(wide.columns, pd.DatetimeIndex)
+    assert wide.columns.is_monotonic_increasing
+    assert wide.shape == (3, 120)
+    np.testing.assert_array_equal(wide.loc["A"].to_numpy(), np.arange(1, 121))
+    assert labels.to_dict() == {"A": 0, "B": 1, "C": 0}
+    assert labels.name == "label"
 
 
-def test_load_raw_structure(small_dataset):
-    """Test that load_raw returns correct data structures."""
-    df_long, labels = small_dataset
-    
-    # Check DataFrame structure
-    assert isinstance(df_long, pd.DataFrame), "df_long should be a DataFrame"
-    assert isinstance(labels, pd.Series), "labels should be a Series"
-    
-    # Check required columns
-    assert 'customer_id' in df_long.columns, "df_long must have customer_id column"
-    assert 'day_index' in df_long.columns, "df_long must have day_index column"
-    assert 'consumption_kwh' in df_long.columns, "df_long must have consumption_kwh column"
-    
-    # Check labels
-    assert labels.name == 'label', "labels Series must be named 'label'"
-    assert set(labels.unique()).issubset({0, 1}), "labels should only contain 0 and 1"
-    
-    # Check non-empty
-    assert len(df_long) > 0, "df_long should not be empty"
-    assert len(labels) > 0, "labels should not be empty"
+def test_load_wide_positional_layout(tmp_path):
+    frame = pd.DataFrame([[1.0, 2.0, "id1", 0], [3.0, np.nan, "id2", 1]], columns=["d0", "d1", "cid", "y"])
+    path = tmp_path / "positional.csv"
+    frame.to_csv(path, index=False)
+
+    wide, labels = load_wide(str(path))
+
+    assert list(wide.index) == ["id1", "id2"]
+    assert labels.tolist() == [0, 1]
+    assert np.isnan(wide.loc["id2"].iloc[1])
 
 
-def test_load_raw_customer_count(small_dataset):
-    """Test that customer count matches."""
-    df_long, labels = small_dataset
-    
-    unique_customers = df_long['customer_id'].nunique()
-    label_count = len(labels)
-    
-    assert unique_customers == label_count, "Number of customers should match label count"
+def test_load_wide_drops_duplicate_customers(tmp_path):
+    frame = pd.DataFrame({"CONS_NO": ["a", "a", "b"], "FLAG": [0, 0, 1], "2014/1/1": [1, 1, 2], "2014/1/2": [3, 3, 4]})
+    path = tmp_path / "dups.csv"
+    frame.to_csv(path, index=False)
+
+    wide, labels = load_wide(str(path))
+
+    assert list(wide.index) == ["a", "b"]
+    assert len(labels) == 2
 
 
-def test_load_raw_consumption_values(small_dataset):
-    """Test that consumption values are reasonable."""
-    df_long, labels = small_dataset
-    
-    consumption = df_long['consumption_kwh']
-    
-    # Check data type
-    assert pd.api.types.is_numeric_dtype(consumption), "consumption_kwh should be numeric"
-    
-    # Check for reasonable values (allowing NaN)
-    valid_consumption = consumption.dropna()
-    assert (valid_consumption >= 0).all(), "consumption should be non-negative"
+def test_load_raw_long_format(sgcc_csv):
+    df_long, labels = load_raw(str(sgcc_csv))
+
+    assert list(df_long.columns) == ["customer_id", "day_index", "consumption_kwh"]
+    assert len(df_long) == 3 * 120
+    first = df_long[df_long["customer_id"] == "A"].sort_values("day_index")
+    np.testing.assert_array_equal(first["consumption_kwh"].to_numpy(), np.arange(1, 121))
+    assert df_long["customer_id"].nunique() == len(labels)
 
 
-def test_save_and_load_features(tmp_path):
-    """Test saving and loading processed features."""
-    # Create synthetic features
-    X = pd.DataFrame({
-        'feature1': np.random.rand(10),
-        'feature2': np.random.rand(10),
-        'feature3': np.random.rand(10)
-    }, index=[f'customer_{i}' for i in range(10)])
-    
-    # load_processed_features returns int32 labels; np.random.randint's default
-    # dtype is platform-dependent (int32 on Windows, int64 on Linux)
-    y = pd.Series(np.random.randint(0, 2, 10), index=X.index, name='label', dtype='int32')
-    
-    # Save
-    output_path = tmp_path / "test_features.csv"
-    save_processed_features(X, y, str(output_path))
-    
-    # Check file exists
-    assert output_path.exists(), "Features file should be created"
-    
-    # Load
-    X_loaded, y_loaded = load_processed_features(str(output_path))
-    
-    # Check loaded data
-    assert X_loaded.shape == X.shape, "Loaded features should have same shape"
-    assert y_loaded.shape == y.shape, "Loaded labels should have same shape"
-    pd.testing.assert_frame_equal(X, X_loaded)
-    pd.testing.assert_series_equal(y, y_loaded)
+def test_demo_dataset_loads(demo_dataset_path):
+    wide, labels = load_wide(str(demo_dataset_path))
+
+    assert len(wide) == len(labels) > 100
+    assert set(labels.unique()) == {0, 1}
+    assert wide.columns.is_monotonic_increasing
+    assert (wide.to_numpy()[~np.isnan(wide.to_numpy())] >= 0).all()
 
 
-def test_load_raw_index_types(small_dataset):
-    """Test that day_index is sequential."""
-    df_long, labels = small_dataset
-    
-    # Check day_index is integer-like
-    assert pd.api.types.is_integer_dtype(df_long['day_index']), "day_index should be integer type"
-    
-    # Check day_index starts from 0
-    assert df_long['day_index'].min() == 0, "day_index should start from 0"
+def test_processed_features_round_trip(tmp_path):
+    X = pd.DataFrame({"f1": [1.0, 2.0], "f2": [0.5, np.nan]}, index=["c1", "c2"])
+    y = pd.Series([0, 1], index=X.index, name="label")
+    path = tmp_path / "features.csv"
 
+    save_processed_features(X, y, str(path))
+    X2, y2 = load_processed_features(str(path))
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    pd.testing.assert_frame_equal(X, X2)
+    assert y2.tolist() == [0, 1]
+    assert list(X2.index) == ["c1", "c2"]

@@ -23,8 +23,4 @@ def dataset(dataset_id: str) -> DatasetUploadResponse:
 
 @router.post("/upload", response_model=DatasetUploadResponse)
 async def upload(file: UploadFile = File(...)) -> DatasetUploadResponse:
-    try:
-        item = await register_uploaded_dataset(file)
-        return DatasetUploadResponse(item=item)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DatasetUploadResponse(item=await register_uploaded_dataset(file))

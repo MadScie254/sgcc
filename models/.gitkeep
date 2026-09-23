@@ -1,2 +1,1 @@
-# This directory stores trained models
-# Files: xgb_best.joblib
+# Trained models: xgb_best.ubj (XGBoost native format), baselines/comparison_results.json

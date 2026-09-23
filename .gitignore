@@ -39,38 +39,28 @@ ENV/
 *.swo
 *~
 
-# Model artifacts
-models/**/*.joblib
-models/**/*.pkl
-models/**/*.h5
-!models/xgb_best.joblib
+# Model artifacts (only the served model and baseline summary are committed)
+models/**
 !models/.gitkeep
+!models/xgb_best.ubj
+!models/baselines/
+!models/baselines/comparison_results.json
 
-# Generated artifacts
-artifacts/**/*.json
-artifacts/**/*.csv
-artifacts/**/*.png
-artifacts/**/*.npy
-artifacts/**/*.pkl
-artifacts/**/*.joblib
+# Generated artifacts (only the files the API reads are committed)
+artifacts/**
+!artifacts/.gitkeep
 !artifacts/metrics.json
 !artifacts/feature_importance.csv
-!artifacts/test_data.pkl
-!artifacts/.gitkeep
+!artifacts/best_params.json
 
-# Raw data drops
-data/*.csv
-!data/.gitkeep
+# Data: the full dataset is downloaded (scripts/download_data.py); only the
+# held-out demo sample the API serves is committed.
+data/**
+!data/sgcc_demo.csv.gz
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Streamlit
-.streamlit/secrets.toml
-
-# Kaggle
-kaggle.json
 
 # Logs
 *.log
@@ -94,3 +84,4 @@ htmlcov/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/*.tsbuildinfo

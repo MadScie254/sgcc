@@ -1,30 +1,41 @@
 from __future__ import annotations
 
-from functools import lru_cache
 import json
+import sys
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
-import joblib
 import numpy as np
 import pandas as pd
 import shap
-from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 
-from src.eval import evaluate_model
 from src.modeling import load_model
 
-from .config import get_config, get_project_paths
-from .data import get_customer_timeseries, get_feature_matrix
+from . import data as data_service
+from .config import BASE_DIR, get_config, get_project_paths
+from .data import finite_or_none, get_feature_matrix
 
 
-HIGH_RISK_THRESHOLD = 0.7
-MEDIUM_RISK_THRESHOLD = 0.4
+# Probabilities at or above this are "high" risk; between the model's decision
+# threshold and this they are "medium"; below the threshold "low".
+HIGH_RISK_PROBABILITY = 0.6
+
+FEATURE_GROUPS = {
+    "statistical": ("mean", "median", "std", "coef_var", "min", "max", "range", "skewness", "kurtosis", "q"),
+    "missing_and_zero": ("missing", "zero", "longest", "first_obs", "last_obs"),
+    "day_to_day": ("sudden_drop", "diff_", "autocorr"),
+    "trend": ("slope", "last", "first", "yoy", "changepoint"),
+    "calendar": ("weekday", "peak"),
+    "monthly": ("monthly", "low_months", "max_monthly"),
+    "monthly_profile": ("month_lag",),
+}
 
 
 @lru_cache(maxsize=1)
 def get_model_path() -> Path:
-    return get_project_paths()["models"] / "xgb_best.joblib"
+    return BASE_DIR / get_config()["paths"]["model_file"]
 
 
 @lru_cache(maxsize=1)
@@ -34,109 +45,116 @@ def get_trained_model():
 
 @lru_cache(maxsize=1)
 def get_feature_names() -> List[str]:
+    names = get_trained_model().get_booster().feature_names
+    if names:
+        return list(names)
     X, _ = get_feature_matrix()
     return X.columns.tolist()
 
 
-def risk_tier_for_probability(probability: float) -> str:
-    if probability >= HIGH_RISK_THRESHOLD:
+@lru_cache(maxsize=1)
+def get_saved_metrics() -> Dict[str, Any]:
+    metrics_path = get_project_paths()["artifacts"] / "metrics.json"
+    if not metrics_path.exists():
+        return {}
+    return json.loads(metrics_path.read_text(encoding="utf-8"))
+
+
+def get_decision_threshold() -> float:
+    return float(get_saved_metrics().get("threshold", 0.5))
+
+
+def risk_tier_for_probability(probability: float, threshold: Optional[float] = None) -> str:
+    threshold = get_decision_threshold() if threshold is None else threshold
+    if probability >= max(HIGH_RISK_PROBABILITY, threshold):
         return "high"
-    if probability >= MEDIUM_RISK_THRESHOLD:
+    if probability >= threshold:
         return "medium"
     return "low"
+
+
+def clear_caches() -> None:
+    """Drop cached model, data, and derived results (e.g. after retraining)."""
+    for module in (data_service, sys.modules[__name__]):
+        for value in vars(module).values():
+            if callable(getattr(value, "cache_clear", None)):
+                value.cache_clear()
+
+
+def _group_features(names: List[str]) -> Dict[str, List[str]]:
+    groups: Dict[str, List[str]] = {group: [] for group in FEATURE_GROUPS}
+    for name in names:
+        for group, prefixes in FEATURE_GROUPS.items():
+            if name.startswith(prefixes):
+                groups[group].append(name)
+                break
+        else:
+            groups.setdefault("other", []).append(name)
+    return {group: members for group, members in groups.items() if members}
 
 
 @lru_cache(maxsize=1)
 def get_model_config() -> Dict[str, Any]:
     config = get_config()
-    feature_groups = {
-        key: value
-        for key, value in config.get("features", {}).items()
-        if isinstance(value, list)
-    }
-    feature_parameters = {
-        key: value
-        for key, value in config.get("features", {}).items()
-        if not isinstance(value, list)
-    }
     return {
-        "feature_groups": feature_groups,
-        "feature_parameters": feature_parameters,
-        "model": config.get("model", {}),
-        "preprocessing": config.get("preprocessing", {}),
+        "feature_groups": _group_features(get_feature_names()),
+        "feature_parameters": dict(config.get("features", {})),
+        "model": {**config.get("model", {}), "decision_threshold": get_decision_threshold()},
+        "preprocessing": {"missing_values": "kept as NaN (handled natively by XGBoost)", "resampling": "none"},
         "evaluation": config.get("evaluation", {}),
     }
 
 
+def _predict(frame: pd.DataFrame) -> np.ndarray:
+    return np.asarray(get_trained_model().predict_proba(frame[get_feature_names()])[:, 1], dtype=float)
+
+
+@lru_cache(maxsize=1)
+def get_population_probabilities() -> pd.Series:
+    X, _ = get_feature_matrix()
+    return pd.Series(_predict(X), index=X.index.astype(str))
+
+
 @lru_cache(maxsize=1)
 def get_model_metrics() -> Dict[str, Any]:
-    metrics_path = get_project_paths()["artifacts"] / "metrics.json"
-    metrics: Dict[str, Any] = {}
-    if metrics_path.exists():
-        with open(metrics_path, "r", encoding="utf-8") as handle:
-            metrics = cast(Dict[str, Any], json.load(handle))
-
-    X, y = get_feature_matrix()
-    model = get_trained_model()
-    probabilities = np.asarray(model.predict_proba(X)[:, 1], dtype=float)
-    threshold = float(metrics.get("threshold", 0.5))
-    predictions = np.asarray(probabilities >= threshold, dtype=int)
-    confusion = confusion_matrix(y, predictions)
-    support = metrics.get("support") or {
-        "class_0": int((y == 0).sum()),
-        "class_1": int((y == 1).sum()),
-    }
+    """Hold-out metrics from training plus live counts over the served (held-out) customers."""
+    saved = get_saved_metrics()
+    _, y = get_feature_matrix()
+    probabilities = get_population_probabilities().to_numpy()
+    threshold = get_decision_threshold()
+    predictions = (probabilities >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y.to_numpy(), predictions, labels=[0, 1]).ravel()
+    support = saved.get("support") or {"class_0": int((y == 0).sum()), "class_1": int((y == 1).sum())}
     total_support = max(int(support.get("class_0", 0)) + int(support.get("class_1", 0)), 1)
+    tiers = [risk_tier_for_probability(p, threshold) for p in probabilities]
 
     return {
         "threshold": threshold,
         "metrics": {
-            "recall": float(metrics.get("recall", 0.0)),
-            "precision": float(metrics.get("precision", 0.0)),
-            "f1": float(metrics.get("f1", 0.0)),
-            "accuracy": float(metrics.get("accuracy", 0.0)),
-            "auc": float(metrics.get("auc", 0.0)),
-            "gmean": float(metrics.get("gmean", 0.0)),
-            "mcc": float(metrics.get("mcc", 0.0)),
+            key: float(saved.get(key, 0.0))
+            for key in ("recall", "precision", "f1", "accuracy", "auc", "pr_auc", "gmean", "mcc")
         },
-        "support": {
-            "class_0": int(support.get("class_0", 0)),
-            "class_1": int(support.get("class_1", 0)),
-        },
-        "confusion_matrix": {
-            "tn": int(confusion[0, 0]),
-            "fp": int(confusion[0, 1]),
-            "fn": int(confusion[1, 0]),
-            "tp": int(confusion[1, 1]),
-        },
-        "customers_monitored": int(len(X)),
+        "support": {"class_0": int(support.get("class_0", 0)), "class_1": int(support.get("class_1", 0))},
+        "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
+        "customers_monitored": int(len(probabilities)),
         "flagged_today": int(predictions.sum()),
         "current_mean_probability": float(probabilities.mean()) if len(probabilities) else 0.0,
         "base_rate": float(int(support.get("class_1", 0)) / total_support),
-        "risk_tier_distribution": {
-            "high": int((probabilities >= HIGH_RISK_THRESHOLD).sum()),
-            "medium": int(((probabilities >= MEDIUM_RISK_THRESHOLD) & (probabilities < HIGH_RISK_THRESHOLD)).sum()),
-            "low": int((probabilities < MEDIUM_RISK_THRESHOLD).sum()),
-        },
+        "risk_tier_distribution": {tier: tiers.count(tier) for tier in ("high", "medium", "low")},
     }
 
 
 @lru_cache(maxsize=1)
 def get_customer_rankings() -> List[Dict[str, Any]]:
-    X, _ = get_feature_matrix()
-    model = get_trained_model()
-    probabilities = np.asarray(model.predict_proba(X)[:, 1], dtype=float)
-    frame = pd.DataFrame(
-        {
-            "customer_id": X.index.astype(str),
-            "risk_score": probabilities,
-        }
-    )
-    frame["threshold"] = get_model_metrics()["threshold"]
-    frame["predicted_label"] = (frame["risk_score"] >= frame["threshold"]).astype(int)
-    frame["risk_tier"] = frame["risk_score"].apply(risk_tier_for_probability)
-    frame["rank"] = frame["risk_score"].rank(method="first", ascending=False).astype(int)
-    return frame.sort_values("risk_score", ascending=False).to_dict(orient="records")
+    probabilities = get_population_probabilities()
+    threshold = get_decision_threshold()
+    frame = pd.DataFrame({"customer_id": probabilities.index, "risk_score": probabilities.to_numpy()})
+    frame["threshold"] = threshold
+    frame["predicted_label"] = (frame["risk_score"] >= threshold).astype(int)
+    frame["risk_tier"] = [risk_tier_for_probability(p, threshold) for p in frame["risk_score"]]
+    frame = frame.sort_values("risk_score", ascending=False, kind="mergesort").reset_index(drop=True)
+    frame["rank"] = frame.index + 1
+    return frame.to_dict(orient="records")
 
 
 def get_customer_table(
@@ -149,21 +167,17 @@ def get_customer_table(
 ) -> Dict[str, Any]:
     rankings = pd.DataFrame(get_customer_rankings())
     if search:
-        rankings = rankings[rankings["customer_id"].str.contains(str(search), case=False, na=False)]
+        rankings = rankings[rankings["customer_id"].str.contains(str(search), case=False, na=False, regex=False)]
     if risk_tier:
         rankings = rankings[rankings["risk_tier"] == risk_tier]
 
     if sort_by not in rankings.columns:
         sort_by = "risk_score"
 
-    ascending = sort_dir == "asc"
-    rankings = rankings.sort_values(sort_by, ascending=ascending, kind="mergesort")
-    rankings = rankings.reset_index(drop=True)
-    rankings["rank"] = rankings.index + 1
+    rankings = rankings.sort_values(sort_by, ascending=sort_dir == "asc", kind="mergesort")
     total = int(len(rankings))
     start = max((page - 1) * page_size, 0)
-    end = start + page_size
-    items = rankings.iloc[start:end].to_dict(orient="records")
+    items = rankings.iloc[start:start + page_size].to_dict(orient="records")
     return {
         "items": items,
         "total": total,
@@ -186,206 +200,123 @@ def get_feature_importance_from_csv(limit: int = 15) -> List[Dict[str, Any]]:
 
 
 @lru_cache(maxsize=1)
-def get_feature_importance(limit: int = 20) -> List[Dict[str, object]]:
-    model = get_trained_model()
-    feature_names = get_feature_names()
-    importance = getattr(model, "feature_importances_", None)
-    if importance is None:
-        raise RuntimeError("Model does not expose feature_importances_")
-
-    ranking = (
-        pd.DataFrame({"feature": feature_names, "importance": importance})
-        .sort_values("importance", ascending=False)
-        .head(limit)
-    )
-    return [
-        {"feature": str(row.feature), "importance": float(cast(Any, row.importance))}
-        for row in ranking.itertuples(index=False)
-    ]
-
-
-@lru_cache(maxsize=1)
 def get_shap_explainer():
-    model = get_trained_model()
-    return shap.TreeExplainer(model)
-
-
-@lru_cache(maxsize=1)
-def get_test_data() -> Dict[str, object]:
-    artifact_path = get_project_paths()["artifacts"] / "test_data.pkl"
-    if not artifact_path.exists():
-        raise FileNotFoundError(f"Test data not found: {artifact_path}")
-    return joblib.load(artifact_path)
+    return shap.TreeExplainer(get_trained_model())
 
 
 def _align_feature_row(features: Dict[str, float]) -> pd.DataFrame:
-    feature_names = get_feature_names()
-    aligned = {name: float(features.get(name, 0.0)) for name in feature_names}
-    return pd.DataFrame([aligned], columns=feature_names)
+    # Features the caller leaves out are treated as missing, as in training.
+    names = get_feature_names()
+    return pd.DataFrame([[float(features.get(name, np.nan)) for name in names]], columns=names)
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=256)
 def get_customer_feature_row(customer_id: str) -> pd.DataFrame:
     X, _ = get_feature_matrix()
-    index_as_str = X.index.astype(str)
-    if str(customer_id) not in index_as_str:
+    customer_id = str(customer_id)
+    if customer_id not in X.index:
         raise KeyError(f"Unknown customer_id: {customer_id}")
-    actual_index = X.index[index_as_str == str(customer_id)][0]
-    row = X.loc[actual_index]
-    if isinstance(row, pd.DataFrame):
-        row = row.iloc[0]
-    return pd.DataFrame([row.to_dict()], columns=get_feature_names())
+    return X.loc[[customer_id], get_feature_names()].reset_index(drop=True)
 
 
-def predict_from_features(features: Dict[str, float], threshold: float = 0.5) -> Dict[str, object]:
-    model = get_trained_model()
-    feature_frame = _align_feature_row(features)
-    probability = float(model.predict_proba(feature_frame)[:, 1][0])
-    prediction = int(probability >= threshold)
-    top_reasons = get_top_reasons(feature_frame)
-    return {
-        "prediction": prediction,
-        "probability": probability,
-        "threshold": threshold,
-        "top_reasons": top_reasons,
-    }
-
-
-def predict_for_customer(customer_id: str, threshold: float = 0.5) -> Dict[str, object]:
-    model = get_trained_model()
-    feature_frame = get_customer_feature_row(customer_id)
-    probability = float(model.predict_proba(feature_frame)[:, 1][0])
-    prediction = int(probability >= threshold)
-    top_reasons = get_top_reasons(feature_frame)
-    return {
-        "customer_id": str(customer_id),
-        "prediction": prediction,
-        "probability": probability,
-        "threshold": threshold,
-        "top_reasons": top_reasons,
-    }
-
-
-def get_top_reasons(feature_frame: pd.DataFrame, top_n: int = 3) -> List[Dict[str, float]]:
+def _shap_row(feature_frame: pd.DataFrame) -> tuple[float, np.ndarray]:
     explainer = get_shap_explainer()
-    shap_values = explainer.shap_values(feature_frame)
+    values = explainer.shap_values(feature_frame)
+    if isinstance(values, list):
+        values = values[-1]
+    values = np.asarray(values, dtype=float).reshape(len(feature_frame), -1)
+    base = explainer.expected_value
+    if isinstance(base, (list, tuple, np.ndarray)):
+        base = np.asarray(base).ravel()[-1]
+    return float(base), values[0]
 
-    if isinstance(shap_values, list):
-        shap_array = np.asarray(shap_values[1 if len(shap_values) > 1 else 0])
-    else:
-        shap_array = np.asarray(shap_values)
 
-    if shap_array.ndim == 1:
-        shap_array = shap_array.reshape(1, -1)
-
-    values = shap_array[0]
-    top_indices = np.argsort(np.abs(values))[::-1][:top_n]
+def _top_reasons(feature_frame: pd.DataFrame, shap_values: np.ndarray, top_n: int) -> List[Dict[str, Any]]:
     row = feature_frame.iloc[0]
-
-    reasons = []
-    for idx in top_indices:
-        feature_name = feature_frame.columns[idx]
-        reasons.append({
-            "feature": feature_name,
-            "value": float(row.iloc[idx]),
-            "shap_value": float(values[idx]),
-        })
-    return reasons
+    return [
+        {
+            "feature": feature_frame.columns[idx],
+            "value": finite_or_none(row.iloc[idx]),
+            "shap_value": float(shap_values[idx]),
+        }
+        for idx in np.argsort(np.abs(shap_values))[::-1][:top_n]
+    ]
 
 
-def _extract_shap_values(explainer, feature_frame: pd.DataFrame) -> tuple[float, List[float]]:
-    shap_values = explainer.shap_values(feature_frame)
-
-    if isinstance(shap_values, list):
-        shap_array = np.asarray(shap_values[1 if len(shap_values) > 1 else 0])
-    else:
-        shap_array = np.asarray(shap_values)
-
-    if shap_array.ndim == 1:
-        shap_array = shap_array.reshape(1, -1)
-
-    base_value = explainer.expected_value
-    if isinstance(base_value, (list, tuple, np.ndarray)):
-        base_value = base_value[1 if len(base_value) > 1 else 0]
-
-    return float(base_value), shap_array[0].astype(float).tolist()
+def _prediction_payload(feature_frame: pd.DataFrame, threshold: Optional[float]) -> Dict[str, Any]:
+    threshold = get_decision_threshold() if threshold is None else threshold
+    probability = float(_predict(feature_frame)[0])
+    _, shap_values = _shap_row(feature_frame)
+    return {
+        "prediction": int(probability >= threshold),
+        "probability": probability,
+        "threshold": threshold,
+        "risk_tier": risk_tier_for_probability(probability, threshold),
+        "top_reasons": _top_reasons(feature_frame, shap_values, top_n=3),
+    }
 
 
-@lru_cache(maxsize=1)
+def predict_from_features(features: Dict[str, float], threshold: Optional[float] = None) -> Dict[str, Any]:
+    return _prediction_payload(_align_feature_row(features), threshold)
+
+
+def predict_for_customer(customer_id: str, threshold: Optional[float] = None) -> Dict[str, Any]:
+    return {"customer_id": str(customer_id), **_prediction_payload(get_customer_feature_row(customer_id), threshold)}
+
+
+def predict_frame(frame: pd.DataFrame) -> np.ndarray:
+    """Probabilities for a frame of feature columns; absent or non-numeric values count as missing."""
+    names = get_feature_names()
+    aligned = frame.reindex(columns=names).apply(pd.to_numeric, errors="coerce")
+    return _predict(aligned)
+
+
+@lru_cache(maxsize=8)
 def get_global_shap_sample(sample_count: int = 200) -> Dict[str, object]:
-    model = get_trained_model()
     X, _ = get_feature_matrix()
-    sample_frame = X.head(sample_count).copy()
-    explainer = get_shap_explainer()
-    shap_values = explainer.shap_values(sample_frame)
-
+    sample_frame = X[get_feature_names()].sample(n=min(sample_count, len(X)), random_state=0)
+    shap_values = get_shap_explainer().shap_values(sample_frame)
     if isinstance(shap_values, list):
-        shap_values = shap_values[1 if len(shap_values) > 1 else 0]
-
-    shap_array = np.asarray(shap_values, dtype=float)
-    feature_values = sample_frame.astype(float).values.tolist()
+        shap_values = shap_values[-1]
 
     return {
         "feature_names": sample_frame.columns.tolist(),
-        "shap_values": shap_array.tolist(),
-        "feature_values": feature_values,
+        "shap_values": np.asarray(shap_values, dtype=float).tolist(),
+        "feature_values": [[finite_or_none(v) for v in row] for row in sample_frame.to_numpy()],
         "sample_count": int(len(sample_frame)),
     }
 
 
 @lru_cache(maxsize=128)
 def get_local_shap_details(customer_id: str) -> Dict[str, object]:
-    model = get_trained_model()
-    explainer = get_shap_explainer()
     feature_frame = get_customer_feature_row(customer_id)
-    probability = float(model.predict_proba(feature_frame)[:, 1][0])
-    base_value, shap_values = _extract_shap_values(explainer, feature_frame)
-
-    feature_names = feature_frame.columns.tolist()
-    feature_values = feature_frame.iloc[0].astype(float).tolist()
-    top_indices = np.argsort(np.abs(np.asarray(shap_values)))[::-1][:5]
-    top_reasons = [
-        {
-            "feature": feature_names[index],
-            "value": float(feature_values[index]),
-            "shap_value": float(shap_values[index]),
-        }
-        for index in top_indices
-    ]
-
+    base_value, shap_values = _shap_row(feature_frame)
     return {
         "customer_id": str(customer_id),
-        "feature_names": feature_names,
-        "feature_values": feature_values,
-        "shap_values": shap_values,
+        "feature_names": feature_frame.columns.tolist(),
+        "feature_values": [finite_or_none(v) for v in feature_frame.iloc[0].tolist()],
+        "shap_values": shap_values.tolist(),
         "base_value": base_value,
-        "probability": probability,
-        "top_reasons": top_reasons,
+        "probability": float(_predict(feature_frame)[0]),
+        "top_reasons": _top_reasons(feature_frame, shap_values, top_n=5),
     }
 
 
 def threshold_preview(threshold: float) -> Dict[str, object]:
-    model = get_trained_model()
-    test_data = get_test_data()
-    X_test = pd.DataFrame(cast(Any, test_data["X_test"]))
-    y_test = pd.Series(cast(Any, test_data["y_test"]))
-    probabilities = np.asarray(model.predict_proba(X_test)[:, 1], dtype=float)
-    predictions = np.asarray(probabilities >= threshold, dtype=int)
-    metrics = {
-        "recall": float(recall_score(y_test, predictions, zero_division=0)),
-        "precision": float(precision_score(y_test, predictions, zero_division=0)),
-        "f1": float(f1_score(y_test, predictions, zero_division=0)),
-        "accuracy": float(accuracy_score(y_test, predictions)),
-        "auc": float(roc_auc_score(y_test, probabilities)),
-    }
-    cm = confusion_matrix(y_test, predictions)
+    """Metrics at ``threshold`` over the served customers, who were held out from training."""
+    _, y = get_feature_matrix()
+    y_true = y.to_numpy()
+    probabilities = get_population_probabilities().reindex(y.index.astype(str)).to_numpy()
+    predictions = (probabilities >= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, predictions, labels=[0, 1]).ravel()
     return {
         "threshold": threshold,
-        "metrics": metrics,
-        "confusion_matrix": {
-            "tn": int(cm[0, 0]),
-            "fp": int(cm[0, 1]),
-            "fn": int(cm[1, 0]),
-            "tp": int(cm[1, 1]),
+        "metrics": {
+            "recall": float(recall_score(y_true, predictions, zero_division=0)),
+            "precision": float(precision_score(y_true, predictions, zero_division=0)),
+            "f1": float(f1_score(y_true, predictions, zero_division=0)),
+            "accuracy": float(accuracy_score(y_true, predictions)),
+            "auc": float(roc_auc_score(y_true, probabilities)) if len(set(y_true)) > 1 else 0.0,
         },
+        "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
     }

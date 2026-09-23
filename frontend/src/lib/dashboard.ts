@@ -6,14 +6,16 @@ export function formatMaybeNumber(value: number | null | undefined, decimals = 2
   return value.toFixed(decimals);
 }
 
-// Keep these thresholds aligned with backend/services/model.py.
-// If HIGH_RISK_THRESHOLD or MEDIUM_RISK_THRESHOLD change there, update this helper too.
-export function riskTierFromProbability(probability: number): "high" | "medium" | "low" {
-  if (probability >= 0.7) {
+// Keep aligned with risk_tier_for_probability in backend/services/model.py:
+// "medium" starts at the model's decision threshold, "high" at HIGH_RISK_PROBABILITY.
+export const HIGH_RISK_PROBABILITY = 0.6;
+
+export function riskTierFromProbability(probability: number, threshold: number): "high" | "medium" | "low" {
+  if (probability >= Math.max(HIGH_RISK_PROBABILITY, threshold)) {
     return "high";
   }
 
-  if (probability >= 0.4) {
+  if (probability >= threshold) {
     return "medium";
   }
 

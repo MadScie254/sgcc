@@ -1,82 +1,98 @@
 # SGCC Theft Detector
 
-Electricity theft detection with a FastAPI backend and React dashboard.
+Electricity-theft detection on the SGCC smart-meter dataset (42,372 customers,
+daily kWh from 2014-01-01 to 2016-10-31, ~8.5% labelled theft), with a FastAPI
+backend and a React dashboard.
 
-## Prerequisites
+## Model
 
-```bash
-git lfs install
-git lfs pull
-```
+XGBoost on 85 features per customer, tuned with Optuna on cross-validated
+PR-AUC. Hold-out results (20% of customers, never seen in tuning or fitting):
 
-Then install dependencies.
+<!-- metrics:start -->
+| Model | ROC-AUC | PR-AUC | Recall | Precision | F1 |
+|---|---|---|---|---|---|
+| XGBoost (threshold 0.228) | 0.847 | 0.506 | 0.432 | 0.553 | 0.485 |
+| Random forest (baseline, 0.5) | 0.816 | 0.417 | 0.115 | 0.783 | 0.200 |
+| Logistic regression (baseline, 0.5) | 0.755 | 0.272 | 0.651 | 0.175 | 0.276 |
 
-### Development
+Test set: 8,475 customers (723 theft). Cross-validated PR-AUC on the training split: 0.523.
+<!-- metrics:end -->
+
+Full numbers: `artifacts/metrics.json` and `models/baselines/comparison_results.json`.
+
+What drives it:
+
+- **Chronological order.** The raw SGCC header stores dates lexicographically
+  (`2014/1/1, 2014/1/10, ...`); the loader sorts them before computing trends,
+  drops, and seasonality.
+- **Missing and zero patterns** are kept as signal (XGBoost handles NaN natively),
+  alongside statistics, day-over-day drops, trends, year-over-year ratios,
+  change points, weekday/weekend ratio, and a 34-month relative consumption profile.
+- **No resampling.** SMOTE+ENN lowered cross-validated PR-AUC from ~0.53 to ~0.42.
+  The decision threshold is chosen from out-of-fold predictions (max F1).
+
+## Run the app
+
+The trained model (`models/xgb_best.ubj`) and a demo population of 3,000 held-out
+customers (`data/sgcc_demo.csv.gz`) are committed, so no training or downloads are needed.
 
 ```bash
 python -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
-cd frontend
-npm install
-npm run dev
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.lock
+uvicorn backend.main:app --reload  # API on http://127.0.0.1:8000
 ```
 
-In a second terminal:
-
-```bash
-cd ..
-.\.venv\Scripts\python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
-```
-
-### Production-style local run
+Frontend (second terminal):
 
 ```bash
 cd frontend
-npm run build
-cd ..
-.\.venv\Scripts\python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+npm ci
+npm run dev                        # http://localhost:5173, proxies /api to :8000
 ```
 
-Or use Docker:
+For a single server, run `npm run build` in `frontend/` and open
+`http://127.0.0.1:8000/`; the backend serves `frontend/dist`.
+
+Docker: `docker compose up --build` (set `API_KEY` in `.env` first; see `.env.example`).
+
+## Train
 
 ```bash
-docker compose up --build
+python scripts/download_data.py    # full SGCC dataset -> data/sgcc_full.csv (175 MB, no credentials)
+python -m src.train --quick        # smoke run: 25% of customers, 5 trials
+python -m src.train                # full run: 40 Optuna trials, 5-fold CV
 ```
 
-Set `API_KEY` in `.env` first when using Docker.
+Training writes the model, `artifacts/metrics.json`, `artifacts/feature_importance.csv`,
+`artifacts/best_params.json`, the baseline comparison, and a fresh demo population.
+Settings live in `config.yaml`.
 
-## Deploy
+## Security
 
-This repo supports a Docker-free Render deployment path.
+- Outside `ENV=development` the API requires `API_KEY`; every `/api/*` route except
+  `/api/health` checks the `X-API-Key` header. Enter the key on the dashboard's
+  **Settings** page; it is stored in that browser only and never built into the JavaScript.
+- `POST /api/train/jobs` overwrites the served model, so it is disabled outside
+  development unless `ENABLE_TRAINING_API=1`. Clients can only change trial count,
+  CV folds, timeout, and test size.
+- Uploads are capped at `MAX_UPLOAD_MB` (default 25).
+- API docs (`/api/docs`) are only served in development.
 
-1. Push to `main`.
-2. Connect the repository in Render once.
-3. Render reads [render.yaml](render.yaml), installs Python and frontend dependencies, builds `frontend/dist`, and starts the FastAPI app directly.
-4. After the first connection, every push to `main` redeploys automatically.
+## Deploy (Render)
 
-If you use a Render preview or production URL, set `FRONTEND_DEV_ORIGIN` to the deployed frontend origin so browser requests are allowed by CORS.
+`render.yaml` installs `requirements.lock`, builds the frontend, and starts uvicorn.
+Connect the repository once in Render; each push to `main` redeploys. Render
+generates `API_KEY`; copy it from the service's environment into the dashboard's
+Settings page.
 
-Open `http://127.0.0.1:8000/`. The backend serves the built React app from `frontend/dist`.
+## Layout
 
-## Already trained
-
-- Model: `models/xgb_best.joblib`
-- Metrics and SHAP artifacts: `artifacts/`
-
-You do not need to retrain to run the app. Retrain only if you want a new model or updated metrics.
-
-The current training flow is split across `src/train.py` for the model and test split, then `src/eval.py` for metrics and feature-importance artifacts.
-
-## Project layout
-
-- `backend/` FastAPI app and API routes
+- `src/` data loading, features, tuning, evaluation, training pipeline
+- `backend/` FastAPI app (`routers/`, `services/`, `schemas/`)
 - `frontend/` React + Vite dashboard
-- `src/` training and feature engineering code
-- `models/` saved model artifacts
-- `artifacts/` metrics, SHAP, scaler, and evaluation outputs
-
-## Notes
-
-- The old Streamlit app has been removed.
-- The backend health check is `GET /api/health`.
-- The frontend runs against the local API on port `8000`.
+- `models/`, `artifacts/` trained model and metrics the API reads
+- `data/sgcc_demo.csv.gz` held-out customers the API serves
+- `scripts/download_data.py` dataset download
+- `concept_note/` project concept note

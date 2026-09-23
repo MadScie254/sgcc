@@ -1,63 +1,57 @@
 from __future__ import annotations
 
+import math
 from functools import lru_cache
-from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
 
-from src.data_loader import load_processed_features, load_raw
-from src.features import build_features, compute_anomaly_features
+from src.data_loader import load_wide
+from src.features import build_features_wide, compute_anomaly_features
 
 from .config import BASE_DIR, get_config
 
 
+def finite_or_none(value: Any) -> float | None:
+    """JSON-safe float: NaN/inf (e.g. undefined features) become None."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
 @lru_cache(maxsize=1)
-def get_long_data() -> Tuple[pd.DataFrame, pd.Series]:
-    config = get_config()
-    raw_path = config["data"]["raw_data_path"]
-    return load_raw(raw_path)
+def get_wide_data() -> Tuple[pd.DataFrame, pd.Series]:
+    """Customer-by-day consumption matrix the API serves, with labels."""
+    path = BASE_DIR / get_config()["data"]["serving_data_path"]
+    return load_wide(str(path))
 
 
 @lru_cache(maxsize=1)
 def get_feature_matrix() -> Tuple[pd.DataFrame, pd.Series]:
-    config = get_config()
-    features_path = Path(config["data"]["processed_features_path"])
-
-    if features_path.exists():
-        return load_processed_features(str(features_path))
-
-    df_long, labels = get_long_data()
-    feature_config = {
-        "sudden_drop_threshold": config["features"]["sudden_drop_threshold"],
-        "peak_day_percentile": config["features"]["peak_day_percentile"],
-        "missing_sequence_threshold": config["features"]["missing_sequence_threshold"],
-    }
-    return build_features(df_long, labels, config=feature_config)
+    wide, labels = get_wide_data()
+    X = build_features_wide(wide, get_config().get("features"))
+    return X, labels.reindex(X.index).astype(int)
 
 
 @lru_cache(maxsize=1)
 def get_dataset_summary() -> Dict[str, object]:
-    config = get_config()
-    df_long, labels = get_long_data()
+    wide, labels = get_wide_data()
     X, _ = get_feature_matrix()
+    values = wide.to_numpy()
+    observed = ~np.isnan(values)
     class_distribution = labels.value_counts().sort_index().astype(int).to_dict()
-    zero_consumption_pct = float((df_long["consumption_kwh"] == 0).mean() * 100)
-    missing_values = {
-        column: int(value)
-        for column, value in X.isna().sum().items()
-        if int(value) > 0
-    }
+    missing_values = {column: int(value) for column, value in X.isna().sum().items() if int(value) > 0}
 
     return {
-        "dataset_path": config["data"]["raw_data_path"],
+        "dataset_path": get_config()["data"]["serving_data_path"],
         "total_customers": int(labels.shape[0]),
-        "total_rows": int(df_long.shape[0]),
+        "total_rows": int(values.size),
         "feature_count": int(X.shape[1]),
         "class_distribution": {str(key): int(value) for key, value in class_distribution.items()},
         "missing_values": missing_values,
-        "zero_consumption_pct": zero_consumption_pct,
+        "zero_consumption_pct": float((values[observed] == 0).mean() * 100) if observed.any() else 0.0,
     }
 
 
@@ -67,18 +61,9 @@ def get_feature_distribution(feature_name: str) -> Dict[str, object]:
     if feature_name not in X.columns:
         raise KeyError(f"Unknown feature: {feature_name}")
 
-    series = pd.to_numeric(X[feature_name], errors="coerce").dropna()
+    series = pd.to_numeric(X[feature_name], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if series.empty:
-        return {
-            "feature": feature_name,
-            "count": 0,
-            "mean": 0.0,
-            "std": 0.0,
-            "min": 0.0,
-            "max": 0.0,
-            "bins": [],
-            "counts": [],
-        }
+        return {"feature": feature_name, "count": 0, "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "bins": [], "counts": []}
 
     bin_count = min(20, max(5, int(np.sqrt(len(series)))))
     counts, bins = np.histogram(series.to_numpy(), bins=bin_count)
@@ -97,48 +82,39 @@ def get_feature_distribution(feature_name: str) -> Dict[str, object]:
 @lru_cache(maxsize=1)
 def get_correlation_matrix() -> Dict[str, object]:
     X, _ = get_feature_matrix()
-    numeric_X = X.select_dtypes(include=[np.number])
-    corr = numeric_X.corr().fillna(0.0).round(6)
-    return {
-        "features": corr.columns.tolist(),
-        "matrix": corr.values.tolist(),
-    }
+    corr = X.select_dtypes(include=[np.number]).corr().fillna(0.0).round(6)
+    return {"features": corr.columns.tolist(), "matrix": corr.values.tolist()}
 
 
 @lru_cache(maxsize=128)
 def get_customer_timeseries(customer_id: str) -> Dict[str, object]:
-    config = get_config()
-    df_long, labels = get_long_data()
-    customer_mask = df_long["customer_id"].astype(str) == str(customer_id)
-    customer_df = df_long.loc[customer_mask].sort_values("day_index").copy()
-
-    if customer_df.empty:
+    wide, labels = get_wide_data()
+    customer_id = str(customer_id)
+    if customer_id not in wide.index:
         raise KeyError(f"Unknown customer_id: {customer_id}")
 
-    threshold = float(config["features"]["sudden_drop_threshold"])
-    values = customer_df["consumption_kwh"].astype(float).fillna(0.0).to_numpy()
-    prev_value = None
-    sudden_drop_flags = []
-    anomaly_scores = []
+    threshold = float(get_config()["features"]["sudden_drop_threshold"])
+    values = wide.loc[customer_id].to_numpy(dtype=float)
+    dates = wide.columns.strftime("%Y-%m-%d") if isinstance(wide.columns, pd.DatetimeIndex) else [None] * len(values)
 
-    for value in values:
-        if prev_value is None or prev_value <= 0:
-            sudden_drop_flags.append(False)
-            anomaly_scores.append(0.0)
-        else:
-            anomaly_score = max(0.0, float((prev_value - value) / prev_value))
-            sudden_drop_flags.append(anomaly_score > threshold)
-            anomaly_scores.append(anomaly_score)
-        prev_value = value
-
-    customer_df["sudden_drop"] = sudden_drop_flags
-    customer_df["anomaly_score"] = anomaly_scores
-    summary = compute_anomaly_features(values, sudden_drop_threshold=threshold)
-    label_value = int(labels.loc[str(customer_id)]) if str(customer_id) in labels.index else None
+    points = []
+    prev = None
+    for day_index, (day, value) in enumerate(zip(dates, values)):
+        score = 0.0
+        if prev is not None and prev > 0 and not math.isnan(value):
+            score = max(0.0, (prev - value) / prev)
+        points.append({
+            "day_index": day_index,
+            "date": day,
+            "consumption_kwh": finite_or_none(value),
+            "sudden_drop": score > threshold,
+            "anomaly_score": score,
+        })
+        prev = value
 
     return {
-        "customer_id": str(customer_id),
-        "label": label_value,
-        "points": customer_df[["day_index", "consumption_kwh", "sudden_drop", "anomaly_score"]].to_dict(orient="records"),
-        "summary": summary,
+        "customer_id": customer_id,
+        "label": int(labels.loc[customer_id]),
+        "points": points,
+        "summary": compute_anomaly_features(values, sudden_drop_threshold=threshold),
     }

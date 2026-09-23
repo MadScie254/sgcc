@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/customers", tags=["customers"])
 @router.get("", response_model=CustomersResponse)
 def list_customers(
     search: str | None = Query(default=None, min_length=1),
-    risk_tier: str | None = Query(default=None),
+    risk_tier: str | None = Query(default=None, pattern="^(high|medium|low)$"),
     sort_by: str = Query(default="risk_score"),
     sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
