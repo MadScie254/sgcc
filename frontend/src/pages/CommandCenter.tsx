@@ -2,16 +2,15 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, CheckCircle2, Play, Search, XCircle } from "lucide-react";
-import { apiErrorMessage, getCases, getModelMetrics, getPipelineRuns, getScoreDistribution, startPipelineRun } from "@/lib/api";
-import { featureLabel } from "@/lib/features";
+import { getCases, getModelMetrics, getPipelineRuns, getScoreDistribution, startPipelineRun, type Tier } from "@/lib/api";
 import { fmtInt, fmtNum, fmtPct, fmtRelative, fmtSeconds, shortId } from "@/lib/format";
-import { Button, Card, CardHeader, ErrorState, PageHeader, Pill, Skeleton, Stat, StatusBadge, TierBadge } from "@/components/ui";
+import { ApiError, Button, Card, CardHeader, PageHeader, Pill, Skeleton, Stat, StatusBadge, TierBadge } from "@/components/ui";
 import { ConfusionGrid, Legend, RiskHistogram } from "@/components/charts";
 
 export function CommandCenterPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [tier, setTier] = useState<"high" | "medium" | undefined>(undefined);
+  const [tier, setTier] = useState<Tier | undefined>(undefined);
   const [search, setSearch] = useState("");
 
   const metrics = useQuery({ queryKey: ["model-metrics"], queryFn: getModelMetrics });
@@ -25,7 +24,7 @@ export function CommandCenterPage() {
   });
 
   if (metrics.isError) {
-    return <ErrorState message={apiErrorMessage(metrics.error, "The API is unreachable. Start the backend and check Settings.")} />;
+    return <ApiError error={metrics.error} />;
   }
 
   const m = metrics.data;
@@ -54,13 +53,13 @@ export function CommandCenterPage() {
           </>
         }
       />
-      {run.isError ? <ErrorState title="Scoring run failed" message={apiErrorMessage(run.error)} /> : null}
+      {run.isError ? <ApiError title="Scoring run failed" error={run.error} /> : null}
 
       <section aria-label="Key figures" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {m ? (
           <>
             <Stat label="Customers monitored" value={fmtInt(m.customers_monitored)} hint="1,034 days of meter reads each" />
-            <Stat label="Flagged for inspection" tone="risk" value={fmtInt(m.flagged_today)} hint={`${fmtPct(m.flagged_today / m.customers_monitored, 1)} of customers at τ = ${m.threshold.toFixed(3)}`} />
+            <Stat label="Flagged for inspection" tone="risk" value={fmtInt(m.flagged)} hint={`${fmtPct(m.flagged / m.customers_monitored, 1)} of customers at τ = ${m.threshold.toFixed(3)}`} />
             <Stat label="Hit rate of flags" value={fmtPct(hitRate)} hint={`vs ${fmtPct(m.base_rate, 1)} base rate · ${hitRate ? (hitRate / m.base_rate).toFixed(1) : "—"}× random`} />
             <Stat label="Model quality (hold-out)" value={fmtNum(m.metrics.auc)} hint={`ROC-AUC · PR-AUC ${fmtNum(m.metrics.pr_auc)}`} />
           </>
@@ -125,7 +124,7 @@ export function CommandCenterPage() {
                         <TierBadge tier={item.risk_tier} />
                       </span>
                     </td>
-                    <td className="max-w-[240px] truncate whitespace-nowrap pr-3 text-[13px] text-ink-2" title={item.top_driver ? featureLabel(item.top_driver.feature) : undefined}>{item.top_driver ? featureLabel(item.top_driver.feature) : "—"}</td>
+                    <td className="max-w-[240px] truncate whitespace-nowrap pr-3 text-[13px] text-ink-2" title={item.top_driver?.label}>{item.top_driver?.label ?? "—"}</td>
                     <td className="pr-[22px]"><StatusBadge status={item.status} /></td>
                   </tr>
                 ))}

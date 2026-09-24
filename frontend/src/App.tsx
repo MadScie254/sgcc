@@ -6,7 +6,7 @@ import { CaseFilePage } from "@/pages/CaseFile";
 import { PipelinePage } from "@/pages/Pipeline";
 import { ThresholdStudioPage } from "@/pages/ThresholdStudio";
 import { ModelPerformancePage } from "@/pages/ModelPerformance";
-import { ScoringPage } from "@/pages/Scoring";
+import { ReportsPage } from "@/pages/Reports";
 import { SettingsPage } from "@/pages/Settings";
 
 export default function App() {
@@ -19,7 +19,7 @@ export default function App() {
         <Route path="/pipeline" element={<PipelinePage />} />
         <Route path="/threshold" element={<ThresholdStudioPage />} />
         <Route path="/model" element={<ModelPerformancePage />} />
-        <Route path="/scoring" element={<ScoringPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import type { OperatingPoint, PredictionReason, ScoreDistribution, TimeSeriesPoint } from "@/lib/api";
-import { featureLabel, featureValue } from "@/lib/features";
+import type { OperatingPoint, Reading, Reason, ScoreDistribution } from "@/lib/api";
 import { fmtInt, fmtNum, fmtPct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -77,15 +76,15 @@ export function Legend({ items }: { items: Array<{ color: string; label: string;
 
 type Month = { key: string; label: string; value: number | null; observed: number; days: number };
 
-function monthly(points: TimeSeriesPoint[]): Month[] {
+function monthly(points: Reading[]): Month[] {
   const groups = new Map<string, Month & { sum: number }>();
   points.forEach((point) => {
-    const key = (point.date ?? "").slice(0, 7) || String(Math.floor(point.day_index / 30));
+    const key = point.date.slice(0, 7);
     const entry = groups.get(key) ?? { key, label: key, value: null, observed: 0, days: 0, sum: 0 };
     entry.days += 1;
-    if (point.consumption_kwh !== null && point.consumption_kwh !== undefined) {
+    if (point.kwh !== null) {
       entry.observed += 1;
-      entry.sum += point.consumption_kwh;
+      entry.sum += point.kwh;
     }
     groups.set(key, entry);
   });
@@ -98,11 +97,11 @@ function monthly(points: TimeSeriesPoint[]): Month[] {
   }));
 }
 
-export function ConsumptionChart({ points, height = 240 }: { points: TimeSeriesPoint[]; height?: number }) {
+export function ConsumptionChart({ points, height = 240 }: { points: Reading[]; height?: number }) {
   const [mode, setMode] = useState<"monthly" | "daily">("monthly");
   const [hover, setHover] = useState<number | null>(null);
   const months = useMemo(() => monthly(points), [points]);
-  const daily = useMemo(() => points.map((p) => p.consumption_kwh ?? null), [points]);
+  const daily = useMemo(() => points.map((p) => p.kwh), [points]);
   const values = mode === "monthly" ? months.map((m) => m.value) : daily;
   const observed = values.filter((v): v is number => v !== null);
   const sorted = [...observed].sort((a, b) => a - b);
@@ -124,30 +123,27 @@ export function ConsumptionChart({ points, height = 240 }: { points: TimeSeriesP
   if (start !== null) gaps.push([start, values.length]);
 
   const step = width / values.length;
-  const dailyPath = useMemo(() => {
-    if (mode !== "daily") return "";
-    let d = "";
+  let dailyPath = "";
+  if (mode === "daily") {
     let pen = false;
     daily.forEach((v, i) => {
       if (v === null) {
         pen = false;
         return;
       }
-      d += `${pen ? "L" : "M"}${(i + 0.5) * step},${y(v).toFixed(1)}`;
+      dailyPath += `${pen ? "L" : "M"}${(i + 0.5) * step},${y(v).toFixed(1)}`;
       pen = true;
     });
-    return d;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, daily, step, top]);
+  }
 
   const hovered = hover !== null
     ? mode === "monthly"
       ? `${months[hover].label} · ${months[hover].value === null ? "no readings" : `${months[hover].value!.toFixed(2)} kWh/day`} · ${months[hover].observed}/${months[hover].days} days read`
-      : `${points[hover].date ?? `day ${hover}`} · ${daily[hover] === null ? "no reading" : `${daily[hover]!.toFixed(2)} kWh`}`
+      : `${points[hover].date} · ${daily[hover] === null ? "no reading" : `${daily[hover]!.toFixed(2)} kWh`}`
     : null;
 
-  const first = points[0]?.date?.slice(0, 7);
-  const last = points[points.length - 1]?.date?.slice(0, 7);
+  const first = points[0]?.date.slice(0, 7);
+  const last = points[points.length - 1]?.date.slice(0, 7);
 
   return (
     <div className="flex flex-col gap-3">
@@ -196,11 +192,11 @@ export function ConsumptionChart({ points, height = 240 }: { points: TimeSeriesP
 
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 
-export function ShapWaterfall({ baseValue, probability, reasons, featureCount }: { baseValue: number; probability: number; reasons: PredictionReason[]; featureCount: number }) {
+export function ShapWaterfall({ baseValue, probability, reasons, featureCount }: { baseValue: number; probability: number; reasons: Reason[]; featureCount: number }) {
   const output = Math.log(probability / (1 - probability));
   const shown = reasons.reduce((sum, r) => sum + r.shap_value, 0);
   const rows = [
-    ...reasons.map((r) => ({ label: featureLabel(r.feature), value: featureValue(r.feature, r.value), shap: r.shap_value, key: r.feature })),
+    ...reasons.map((r) => ({ label: r.label, value: r.display_value, shap: r.shap_value, key: r.feature })),
     { label: `${featureCount - reasons.length} other features`, value: "combined", shap: output - baseValue - shown, key: "__other" },
   ];
   let cursor = baseValue;

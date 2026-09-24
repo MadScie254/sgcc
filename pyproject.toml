@@ -20,8 +20,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "pyyaml>=6.0",
-    "requests>=2.31",
-    "fpdf2>=2.7",
+    "fpdf2>=2.7.8",
     # Tests
     "pytest>=8.0",
     "httpx2>=2.0",
@@ -29,6 +28,11 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Third-party deprecation notices (starlette's test client, shap's colormaps), not ours.
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.testclient",
+    "ignore::PendingDeprecationWarning:shap.plots.colors._colors",
+]
 
 [tool.uv]
 # Resolve the universal lock only for the supported Python range.

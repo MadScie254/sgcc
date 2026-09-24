@@ -1,7 +1,7 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { CaseStatus } from "@/lib/api";
+import { apiErrorMessage, type CaseStatus } from "@/lib/api";
 import { STATUS_META } from "@/lib/status";
 
 export function Card({ children, className, label }: { children: ReactNode; className?: string; label?: string }) {
@@ -142,6 +142,19 @@ export function ErrorState({ title = "Could not load this view", message }: { ti
       </div>
     </div>
   );
+}
+
+/** An error from an API call, showing the server's own explanation when it gives one. */
+export function ApiError({ error, title }: { error: unknown; title?: string }) {
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    let live = true;
+    void apiErrorMessage(error).then((text) => live && setMessage(text));
+    return () => {
+      live = false;
+    };
+  }, [error]);
+  return <ErrorState title={title} message={message || "…"} />;
 }
 
 export function Empty({ title, message }: { title: string; message?: string }) {

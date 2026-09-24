@@ -1,29 +1,28 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import List
 
-from backend.schemas.api import ReportRequest, ReportResponse
-from backend.services.reporting import build_report_file_response, generate_report, load_report_index
+from fastapi import APIRouter, Query
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
+
+from backend.schemas import Report, ReportRequest
+from backend.services.reports import generate_report, list_reports, report_path
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
-@router.post("/generate", response_model=ReportResponse)
-def create_report(request: ReportRequest) -> ReportResponse:
-    try:
-        return ReportResponse(**generate_report(request.dataset_id, request.country_code, request.latitude, request.longitude))
-    except (KeyError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@router.get("", response_model=List[Report])
+def reports(limit: int = Query(default=50, ge=1, le=500)):
+    return list_reports(limit)
 
 
-@router.get("/latest", response_model=list[dict])
-def latest_reports() -> list[dict]:
-    return load_report_index()[:10]
+@router.post("", response_model=Report, status_code=201)
+async def create_report(request: ReportRequest):
+    subject_id = request.dataset_id if request.kind == "dataset" else request.customer_id
+    return await run_in_threadpool(generate_report, request.kind, subject_id)
 
 
-@router.get("/{report_id}/download")
-def download_report(report_id: str):
-    try:
-        return build_report_file_response(report_id)
-    except (KeyError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@router.get("/{report_id}/pdf")
+def download(report_id: str) -> FileResponse:
+    return FileResponse(report_path(report_id), media_type="application/pdf", filename=f"{report_id}.pdf")

@@ -1,37 +1,31 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 
-from backend.schemas.api import CustomerTimeseriesResponse, CustomersResponse, LocalShapResponse
+from fastapi import APIRouter, Query
+
+from backend.schemas import CustomerList, Explanation, TimeSeries
+from backend.services import model
 from backend.services.data import get_customer_timeseries
-from backend.services.model import get_customer_table, get_local_shap_details
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
 
 
-@router.get("", response_model=CustomersResponse)
+@router.get("", response_model=CustomerList)
 def list_customers(
-    search: str | None = Query(default=None, min_length=1),
-    risk_tier: str | None = Query(default=None, pattern="^(high|medium|low)$"),
-    sort_by: str = Query(default="risk_score"),
-    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    search: Optional[str] = Query(default=None, min_length=1, max_length=64),
+    tier: Optional[str] = Query(default=None, pattern="^(high|medium|low)$"),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-) -> CustomersResponse:
-    return CustomersResponse(**get_customer_table(search, risk_tier, sort_by, sort_dir, page, page_size))
+    page_size: int = Query(default=25, ge=1, le=100),
+):
+    return model.list_customers(search, tier, page, page_size)
 
 
-@router.get("/{customer_id}/shap", response_model=LocalShapResponse)
-def customer_shap(customer_id: str) -> LocalShapResponse:
-    try:
-        return LocalShapResponse(**get_local_shap_details(customer_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@router.get("/{customer_id}/timeseries", response_model=TimeSeries)
+def timeseries(customer_id: str):
+    return get_customer_timeseries(customer_id)
 
 
-@router.get("/{customer_id}/timeseries", response_model=CustomerTimeseriesResponse)
-def customer_timeseries(customer_id: str) -> CustomerTimeseriesResponse:
-    try:
-        return CustomerTimeseriesResponse(**get_customer_timeseries(customer_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@router.get("/{customer_id}/explanation", response_model=Explanation)
+def explanation(customer_id: str):
+    return model.explain_customer(customer_id)

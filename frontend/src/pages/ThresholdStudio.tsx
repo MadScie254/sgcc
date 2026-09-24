@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiErrorMessage, getModelMetrics, getOperatingCurve, publishThreshold, type OperatingPoint } from "@/lib/api";
+import { getModelMetrics, getOperatingCurve, publishThreshold, type OperatingPoint } from "@/lib/api";
 import { fmtInt, fmtPct } from "@/lib/format";
-import { Button, Card, CardHeader, ErrorState, PageHeader, Pill, Skeleton, Stat } from "@/components/ui";
+import { ApiError, Button, Card, CardHeader, PageHeader, Pill, Skeleton, Stat } from "@/components/ui";
 import { ConfusionGrid, Legend, TradeoffChart } from "@/components/charts";
 
 function nearest(points: OperatingPoint[], threshold: number): number {
@@ -24,7 +24,7 @@ export function ThresholdStudioPage() {
     onSuccess: () => queryClient.invalidateQueries(),
   });
 
-  if (curve.isError || metrics.isError) return <ErrorState message={apiErrorMessage(curve.error ?? metrics.error)} />;
+  if (curve.isError || metrics.isError) return <ApiError error={curve.error ?? metrics.error} />;
   if (!curve.data || !metrics.data || index === null) {
     return <div className="flex flex-col gap-4"><Skeleton className="h-24" /><Skeleton className="h-28" /><Skeleton className="h-80" /></div>;
   }
@@ -33,7 +33,7 @@ export function ThresholdStudioPage() {
   const p = points[index];
   const theft = p.tp + p.fn;
   const inService = metrics.data.threshold;
-  const trained = metrics.data.trained_threshold ?? inService;
+  const trained = metrics.data.trained_threshold;
   const isInService = Math.abs(p.threshold - inService) < 0.005;
   const presets: Array<[string, number]> = [["Wide net", 0.1], ["Balanced", trained], ["Sure bets", 0.5]];
 
@@ -84,7 +84,7 @@ export function ThresholdStudioPage() {
           <CardHeader title="What happens on the ground" />
           <ConfusionGrid tp={p.tp} fp={p.fp} fn={p.fn} tn={p.tn} />
           <div className="mt-auto flex flex-col gap-2.5">
-            {publish.isError ? <ErrorState title="Could not publish" message={apiErrorMessage(publish.error)} /> : null}
+            {publish.isError ? <ApiError title="Could not publish" error={publish.error} /> : null}
             {publish.isSuccess && isInService ? (
               <p role="status" className="m-0 text-[13px] text-cobalt-ink">Published. Scoring now flags {fmtInt(p.tp + p.fp)} customers; new flags open cases.</p>
             ) : null}

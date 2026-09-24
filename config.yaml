@@ -55,5 +55,3 @@ paths:
   models: "models"
   model_file: "models/xgb_best.ubj"
   artifacts: "artifacts"
-  uploads: "data/uploads"
-  reports: "artifacts/reports"

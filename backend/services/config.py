@@ -7,28 +7,40 @@ from typing import Any, Dict
 
 import yaml
 
-
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 @lru_cache(maxsize=1)
-def get_config(config_path: str | None = None) -> Dict[str, Any]:
-    path = Path(config_path) if config_path else BASE_DIR / "config.yaml"
-    with open(path, "r", encoding="utf-8") as handle:
+def get_config() -> Dict[str, Any]:
+    with open(BASE_DIR / "config.yaml", "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 
 
 @lru_cache(maxsize=1)
-def get_project_paths() -> Dict[str, Path]:
+def get_paths() -> Dict[str, Path]:
+    """Absolute paths the API reads and writes. Runtime state is never committed."""
     config = get_config()
-    paths = config.get("paths", {})
+    paths = config["paths"]
+    # Everything the API writes (cases, runs, threshold, uploads, reports) lives under one directory.
+    state = BASE_DIR / os.getenv("SGCC_STATE_DIR", "artifacts/state")
     return {
-        "models": BASE_DIR / paths.get("models", "models"),
-        "artifacts": BASE_DIR / paths.get("artifacts", "artifacts"),
-        "logs": BASE_DIR / paths.get("logs", "logs"),
-        "uploads": BASE_DIR / paths.get("uploads", "data/uploads"),
-        "reports": BASE_DIR / paths.get("reports", "artifacts/reports"),
-        "data": BASE_DIR / "data",
-        # Runtime state (cases, pipeline runs, operating threshold); not committed.
-        "state": BASE_DIR / os.getenv("SGCC_STATE_DIR", "artifacts/state"),
+        "model_file": BASE_DIR / paths["model_file"],
+        "artifacts": BASE_DIR / paths["artifacts"],
+        "baselines": BASE_DIR / paths["models"] / "baselines" / "comparison_results.json",
+        "serving_data": BASE_DIR / config["data"]["serving_data_path"],
+        "state": state,
+        "uploads": state / "uploads",
+        "reports": state / "reports",
     }
+
+
+def environment() -> str:
+    return os.getenv("ENV", "development").lower()
+
+
+def scoring_interval_minutes() -> float:
+    """Minutes between scheduled scoring runs; 0 disables the schedule."""
+    try:
+        return max(float(os.getenv("SCORING_INTERVAL_MINUTES", "0")), 0.0)
+    except ValueError:
+        return 0.0

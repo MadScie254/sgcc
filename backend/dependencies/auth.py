@@ -5,12 +5,13 @@ import os
 
 from fastapi import Header, HTTPException, Request, status
 
+from backend.services.config import environment
+
 
 def load_api_key() -> str | None:
-    env_name = os.getenv("ENV", "development").lower()
     api_key = os.getenv("API_KEY") or None
 
-    if env_name != "development" and not api_key:
+    if environment() != "development" and not api_key:
         raise RuntimeError("API_KEY must be set unless ENV=development")
 
     return api_key

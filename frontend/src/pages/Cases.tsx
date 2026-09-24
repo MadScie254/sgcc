@@ -2,11 +2,10 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
-import { apiErrorMessage, getCases, type CaseStatus } from "@/lib/api";
-import { featureLabel, featureValue } from "@/lib/features";
+import { getCases, type CaseStatus, type Tier } from "@/lib/api";
 import { fmtInt, fmtRelative, shortId } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import { Button, Card, Empty, ErrorState, PageHeader, Pill, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
+import { ApiError, Button, Card, Empty, PageHeader, Pill, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
 import { STATUS_META } from "@/lib/status";
 
 const STATUSES: CaseStatus[] = ["new", "reviewing", "dispatched", "confirmed", "cleared"];
@@ -15,7 +14,7 @@ const PAGE_SIZE = 25;
 export function CasesPage() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<CaseStatus | undefined>(undefined);
-  const [tier, setTier] = useState<"high" | "medium" | undefined>(undefined);
+  const [tier, setTier] = useState<Tier | undefined>(undefined);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
@@ -33,9 +32,9 @@ export function CasesPage() {
   return (
     <>
       <PageHeader
-        eyebrow={cases.data ? `${fmtInt(totalAll)} customers at or above threshold ${cases.data.threshold.toFixed(3)}` : "Loading…"}
+        eyebrow={cases.data ? `${fmtInt(totalAll)} cases · threshold in service ${cases.data.threshold.toFixed(3)}` : "Loading…"}
         title="Case files"
-        description="Every flagged customer becomes a case with the model's reasons attached. Work them from new to a field outcome."
+        description="Every flagged customer becomes a case with the model's reasons attached. Cases you have worked on stay here even if a later threshold no longer flags them."
       />
 
       <div role="tablist" aria-label="Case status" className="flex flex-wrap gap-2 border-b border-line">
@@ -67,7 +66,7 @@ export function CasesPage() {
         </label>
       </div>
 
-      {cases.isError ? <ErrorState message={apiErrorMessage(cases.error)} /> : null}
+      {cases.isError ? <ApiError error={cases.error} /> : null}
 
       <Card label="Cases" className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -91,12 +90,17 @@ export function CasesPage() {
                     <Link to={`/cases/${item.customer_id}`} onClick={(e) => e.stopPropagation()} className="hover:text-cobalt" title={item.customer_id}>{shortId(item.customer_id, 16)}</Link>
                   </td>
                   <td className="font-mono text-[13px] tabular">{item.risk_score.toFixed(3)}</td>
-                  <td><TierBadge tier={item.risk_tier} /></td>
+                  <td>
+                    <span className="flex flex-col items-start gap-1">
+                      <TierBadge tier={item.risk_tier} />
+                      {item.flagged ? null : <span className="text-[11px] text-ink-3">below threshold</span>}
+                    </span>
+                  </td>
                   <td className="text-[13px]">
                     {item.top_driver ? (
                       <span className="flex flex-col">
-                        <span>{featureLabel(item.top_driver.feature)}</span>
-                        <span className="text-xs text-ink-3">{featureValue(item.top_driver.feature, item.top_driver.value)}</span>
+                        <span>{item.top_driver.label}</span>
+                        <span className="text-xs text-ink-3">{item.top_driver.display_value}</span>
                       </span>
                     ) : "—"}
                   </td>

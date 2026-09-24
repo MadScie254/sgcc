@@ -12,7 +12,7 @@ const NAV = [
   { to: "/pipeline", label: "Pipeline", icon: Workflow },
   { to: "/threshold", label: "Threshold studio", icon: SlidersHorizontal },
   { to: "/model", label: "Model performance", icon: Gauge },
-  { to: "/scoring", label: "Scoring & reports", icon: FileText },
+  { to: "/reports", label: "Reports & scoring", icon: FileText },
 ];
 
 function Logo() {

@@ -34,29 +34,12 @@ from sklearn.pipeline import make_pipeline  # noqa: E402
 from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 from src.data_loader import load_wide  # noqa: E402
+from src.feature_catalog import feature_label  # noqa: E402
 from src.features import build_features_wide  # noqa: E402
 from src.modeling import load_model  # noqa: E402
 
 OUT = ROOT / "docs" / "thesis-figures"
 
-LABELS = {
-    "longest_missing_run": "Longest reporting gap", "std": "Consumption volatility (std)", "range": "Range of daily readings",
-    "missing_ratio_first_third": "Missing reads, first third", "missing_ratio_last_third": "Missing reads, last third",
-    "max": "Highest daily reading", "q10_rel": "Low-use days vs average", "q90_rel": "High-use days vs average",
-    "sudden_drop_rate": "Sudden-drop rate", "sudden_drop_count": "Sudden drops (>50%)", "autocorr_lag7": "Weekly consistency",
-    "autocorr_lag1": "Day-to-day consistency", "slope_full": "Overall trend", "last30_vs_mean": "Last 30 days vs average",
-    "last_obs_frac": "Last reading position", "first_obs_frac": "First reading position", "mean": "Average daily use",
-    "median": "Median daily use", "missing_ratio": "Missing reads", "zero_ratio": "Share of zero readings",
-    "coef_var": "Relative volatility", "kurtosis": "Spikiness of readings", "skewness": "Skew of readings",
-    "monthly_cv": "Month-to-month volatility", "yoy_last_12m": "Last 12 months vs year before",
-    "changepoint_min_ratio": "Use after vs before change point", "first180_vs_mean": "First 180 days vs average",
-}
-
-
-def feature_label(name: str) -> str:
-    if name.startswith("month_lag_"):
-        return f"Use {int(name.rsplit('_', 1)[1])} months ago vs average"
-    return LABELS.get(name, name.replace("_", " "))
 
 # Validated categorical slots (blue, orange, aqua) and text/grid tokens.
 BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"

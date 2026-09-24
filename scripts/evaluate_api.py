@@ -6,8 +6,9 @@ Check the model end to end through a running API.
 
 Verifies that the served model reproduces its hold-out quality, that every
 endpoint scores a customer identically, that SHAP explanations add up to the
-predicted probability, and that publishing a threshold re-flags customers.
-Exits non-zero if any check fails.
+predicted probability, that publishing a threshold re-flags customers, and
+that a PDF report can be generated and downloaded. Exits non-zero if any
+check fails.
 """
 
 import argparse
@@ -23,11 +24,14 @@ class Client:
         self.base = base.rstrip("/") + "/api"
         self.headers = {"Content-Type": "application/json", **({"X-API-Key": key} if key else {})}
 
-    def call(self, method: str, path: str, body=None):
+    def raw(self, method: str, path: str, body=None) -> bytes:
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(self.base + path, data=data, method=method, headers=self.headers)
         with urllib.request.urlopen(request, timeout=120) as response:
-            return json.loads(response.read())
+            return response.read()
+
+    def call(self, method: str, path: str, body=None):
+        return json.loads(self.raw(method, path, body))
 
 
 def main() -> int:
@@ -77,21 +81,29 @@ def main() -> int:
     worst_gap, worst_shap = 0.0, 0.0
     for item in ranked[: args.sample]:
         single = api.call("POST", "/predict/single", {"customer_id": item["customer_id"]})
-        local = api.call("GET", f"/explain/local-shap/{item['customer_id']}")
+        local = api.call("GET", f"/customers/{item['customer_id']}/explanation")
         worst_gap = max(worst_gap, abs(single["probability"] - item["risk_score"]), abs(local["probability"] - item["risk_score"]))
-        logit = local["base_value"] + sum(local["shap_values"])
+        logit = local["base_value"] + sum(c["shap_value"] for c in local["contributions"])
         worst_shap = max(worst_shap, abs(1 / (1 + math.exp(-logit)) - local["probability"]))
     check("endpoint consistency", worst_gap < 1e-6, f"max score difference across endpoints {worst_gap:.2e} over {len(ranked[:args.sample])} customers")
     check("SHAP additivity", worst_shap < 1e-3, f"max |sigmoid(base + Σ shap) − p| = {worst_shap:.2e}")
 
-    flagged_before = metrics["flagged_today"]
+    flagged_before = metrics["flagged"]
     raised = api.call("PUT", "/model/threshold", {"threshold": 0.5})
     restored = api.call("PUT", "/model/threshold", {"threshold": None})
-    check("threshold publish round trip", raised["flagged_today"] < flagged_before == restored["flagged_today"],
-          f"flagged {flagged_before} → {raised['flagged_today']} at τ 0.5 → {restored['flagged_today']} after reset")
+    check("threshold publish round trip", raised["flagged"] < flagged_before == restored["flagged"],
+          f"flagged {flagged_before} → {raised['flagged']} at τ 0.5 → {restored['flagged']} after reset")
 
+    # Worked cases stay listed after their customer drops below the threshold, so ≥ rather than ==.
     cases = api.call("GET", "/cases?page_size=1")
-    check("cases opened for flags", cases["total"] == restored["flagged_today"], f"{cases['total']} cases for {restored['flagged_today']} flagged customers")
+    check("cases opened for flags", cases["total"] >= restored["flagged"], f"{cases['total']} cases for {restored['flagged']} flagged customers")
+
+    if health["reports"]["available"]:
+        report = api.call("POST", "/reports", {"kind": "portfolio"})
+        pdf = api.raw("GET", f"/reports/{report['report_id']}/pdf")
+        check("portfolio report", pdf.startswith(b"%PDF") and len(pdf) == report["bytes"], f"{report['report_id']}.pdf, {len(pdf):,} bytes")
+    else:
+        check("portfolio report", False, health["reports"]["detail"])
 
     print(f"\n{'All checks passed' if not failures else f'{len(failures)} check(s) failed: ' + ', '.join(failures)}")
     return 1 if failures else 0

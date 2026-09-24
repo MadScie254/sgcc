@@ -72,6 +72,9 @@ jobs:
           curl -fsS -H "X-API-Key: ci-smoke-key" http://127.0.0.1:8000/api/customers >/dev/null
           curl -fsS -H "X-API-Key: ci-smoke-key" http://127.0.0.1:8000/api/model/metrics >/dev/null
 
+      - name: Evaluate the served model through the API
+        run: python scripts/evaluate_api.py --url http://127.0.0.1:8000 --key ci-smoke-key
+
       - name: Show API log on failure
         if: failure()
         run: cat api.log

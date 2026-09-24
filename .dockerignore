@@ -14,5 +14,5 @@ frontend/.vite/
 *.log
 *.sqlite3data/*
 !data/sgcc_demo.csv.gz
-artifacts/reports/
+artifacts/state/
 frontend/*.tsbuildinfo

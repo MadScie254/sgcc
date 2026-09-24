@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, XCircle } from "lucide-react";
-import { apiClient, getHealth, getStoredApiKey, setStoredApiKey } from "@/lib/api";
+import { apiErrorMessage, getHealth, getModelMetrics, getStoredApiKey, setStoredApiKey } from "@/lib/api";
 import { Button, Card, CardHeader, PageHeader } from "@/components/ui";
 
 type CheckState = { tone: "ok" | "error" | "idle"; message: string };
@@ -17,12 +17,12 @@ export function SettingsPage() {
     setBusy(true);
     setStoredApiKey(apiKey.trim());
     try {
-      await apiClient.get("/model/config");
+      // Health is public; the metrics endpoint is behind the key, so it proves the key works.
+      await getModelMetrics();
       setCheck({ tone: "ok", message: "Connected. The key is stored in this browser only." });
       await queryClient.invalidateQueries();
     } catch (error) {
-      const status = (error as { response?: { status?: number } }).response?.status;
-      setCheck({ tone: "error", message: status === 401 ? "The API rejected this key." : "Could not reach the API." });
+      setCheck({ tone: "error", message: await apiErrorMessage(error, "The key could not be checked") });
     } finally {
       setBusy(false);
     }
@@ -55,10 +55,12 @@ export function SettingsPage() {
               ["Status", health.data?.status ?? (health.isError ? "unreachable" : "…")],
               ["Model loaded", health.data ? (health.data.model_loaded ? "yes" : "no") : "…"],
               ["Model version", health.data?.model_version ?? "…"],
+              ["PDF reports", health.data ? (health.data.reports.available ? `fpdf2 ${health.data.reports.fpdf_version}` : "unavailable") : "…"],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between border-t border-line-soft pt-2 first:border-0 first:pt-0"><dt className="text-ink-2">{k}</dt><dd className="m-0 font-mono">{v}</dd></div>
             ))}
           </dl>
+          {health.data?.reports.detail ? <p className="m-0 text-[13px] text-risk-text">{health.data.reports.detail}</p> : null}
         </Card>
       </div>
     </>

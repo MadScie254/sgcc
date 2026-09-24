@@ -1,28 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
-import { apiErrorMessage, getCase, getCustomerTimeseries, getLocalShap, getModelMetrics, updateCase, type CaseStatus, type TimeSeriesPoint } from "@/lib/api";
-import { featureLabel, featureValue } from "@/lib/features";
+import { ArrowLeft, FileDown } from "lucide-react";
+import { createAndDownloadReport, getCase, getExplanation, getModelMetrics, getTimeseries, updateCase, type CaseStatus, type Reading } from "@/lib/api";
 import { fmtDateTime, fmtInt } from "@/lib/format";
-import { Button, Card, CardHeader, ErrorState, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
+import { ApiError, Button, Card, CardHeader, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
 import { ConsumptionChart, Gauge, ShapWaterfall } from "@/components/charts";
 
-function seriesFacts(points: TimeSeriesPoint[]) {
-  const observed = points.filter((p) => p.consumption_kwh !== null && p.consumption_kwh !== undefined);
+function seriesFacts(points: Reading[]) {
+  const observed = points.filter((p): p is { date: string; kwh: number } => p.kwh !== null);
   let longest = 0;
   let run = 0;
   points.forEach((p) => {
-    run = p.consumption_kwh === null || p.consumption_kwh === undefined ? run + 1 : 0;
+    run = p.kwh === null ? run + 1 : 0;
     longest = Math.max(longest, run);
   });
-  const mean = observed.length ? observed.reduce((s, p) => s + (p.consumption_kwh as number), 0) / observed.length : null;
+  const mean = observed.length ? observed.reduce((s, p) => s + p.kwh, 0) / observed.length : null;
   return {
     first: observed[0]?.date ?? null,
     last: observed[observed.length - 1]?.date ?? null,
     coverage: points.length ? observed.length / points.length : 0,
     longestGap: longest,
-    zeroDays: observed.filter((p) => p.consumption_kwh === 0).length,
+    zeroDays: observed.filter((p) => p.kwh === 0).length,
     mean,
   };
 }
@@ -40,8 +39,8 @@ export function CaseFilePage() {
   const caseQuery = useQuery({ queryKey: ["case", customerId], queryFn: () => getCase(customerId) });
   const metrics = useQuery({ queryKey: ["model-metrics"], queryFn: getModelMetrics });
   const threshold = metrics.data?.threshold ?? 0.5;
-  const shap = useQuery({ queryKey: ["local-shap", customerId], queryFn: () => getLocalShap(customerId), enabled: caseQuery.isSuccess });
-  const series = useQuery({ queryKey: ["timeseries", customerId], queryFn: () => getCustomerTimeseries(customerId), enabled: caseQuery.isSuccess });
+  const explanation = useQuery({ queryKey: ["explanation", customerId], queryFn: () => getExplanation(customerId), enabled: caseQuery.isSuccess });
+  const series = useQuery({ queryKey: ["timeseries", customerId], queryFn: () => getTimeseries(customerId), enabled: caseQuery.isSuccess });
   const [note, setNote] = useState("");
 
   useEffect(() => { setNote(caseQuery.data?.note ?? ""); }, [caseQuery.data?.note]);
@@ -54,19 +53,25 @@ export function CaseFilePage() {
     },
   });
 
+  const report = useMutation({
+    mutationFn: () => createAndDownloadReport({ kind: "case", customer_id: customerId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["reports"] }),
+  });
+
   const facts = useMemo(() => (series.data ? seriesFacts(series.data.points) : null), [series.data]);
 
   if (caseQuery.isError) {
     return (
       <>
         <Link to="/cases" className="flex items-center gap-2 text-[13px] text-cobalt"><ArrowLeft className="h-4 w-4" aria-hidden />Case files</Link>
-        <ErrorState title="Customer not found" message={apiErrorMessage(caseQuery.error, `No customer ${customerId} in the served population.`)} />
+        <ApiError title="Customer not found" error={caseQuery.error} />
       </>
     );
   }
 
   const c = caseQuery.data;
-  const top = shap.data?.top_reasons[0];
+  const contributions = explanation.data?.contributions ?? [];
+  const top = contributions[0];
 
   return (
     <>
@@ -85,11 +90,14 @@ export function CaseFilePage() {
           <h1 className="m-0 break-all font-mono text-[26px] font-medium tracking-[-0.01em]">{customerId}</h1>
           <p className="m-0 text-[15px] leading-relaxed text-ink-2">
             {facts && top
-              ? <>Readings cover {Math.round(facts.coverage * 100)}% of days{facts.last ? `, the last on ${facts.last}` : ""}; longest gap {fmtInt(facts.longestGap)} days. Strongest signal: <strong className="font-medium text-ink">{featureLabel(top.feature).toLowerCase()}</strong> ({featureValue(top.feature, top.value)}).</>
+              ? <>Readings cover {Math.round(facts.coverage * 100)}% of days{facts.last ? `, the last on ${facts.last}` : ""}; longest gap {fmtInt(facts.longestGap)} days. Strongest signal: <strong className="font-medium text-ink">{top.label.toLowerCase()}</strong> ({top.display_value}).</>
               : "Loading the customer's history and the model's reasons…"}
           </p>
         </div>
         <div className="flex flex-wrap gap-2.5">
+          <Button variant="ghost" disabled={!c} busy={report.isPending} onClick={() => report.mutate()}>
+            <FileDown className="h-4 w-4" aria-hidden />Case report (PDF)
+          </Button>
           {ACTIONS.map((action) => (
             <Button key={action.status} variant={action.primary ? "primary" : "secondary"} disabled={!c || c.status === action.status}
               busy={save.isPending && save.variables?.status === action.status} onClick={() => save.mutate({ status: action.status })}>
@@ -98,7 +106,8 @@ export function CaseFilePage() {
           ))}
         </div>
       </header>
-      {save.isError ? <ErrorState title="Could not update the case" message={apiErrorMessage(save.error)} /> : null}
+      {save.isError ? <ApiError title="Could not update the case" error={save.error} /> : null}
+      {report.isError ? <ApiError title="Could not produce the case report" error={report.error} /> : null}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[300px_1fr]">
         <Card label="Theft probability" className="flex flex-col items-center gap-3 p-[22px]">
@@ -131,9 +140,9 @@ export function CaseFilePage() {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card label="Why the model flagged this customer" className="flex flex-col gap-4 p-[22px]">
           <CardHeader title="Why it was flagged" subtitle="SHAP contributions in log-odds: red pushes towards theft, blue away from it." />
-          {shap.data ? (
-            <ShapWaterfall baseValue={shap.data.base_value} probability={shap.data.probability} reasons={shap.data.top_reasons} featureCount={shap.data.feature_names.length} />
-          ) : shap.isError ? <ErrorState message={apiErrorMessage(shap.error)} /> : <Skeleton className="h-64" />}
+          {explanation.data ? (
+            <ShapWaterfall baseValue={explanation.data.base_value} probability={explanation.data.probability} reasons={contributions.slice(0, 5)} featureCount={contributions.length} />
+          ) : explanation.isError ? <ApiError error={explanation.error} /> : <Skeleton className="h-64" />}
         </Card>
 
         <Card label="Case activity" className="flex flex-col gap-4 p-[22px]">

@@ -29,7 +29,7 @@ COPY artifacts ./artifacts
 COPY data/sgcc_demo.csv.gz ./data/sgcc_demo.csv.gz
 COPY config.yaml ./
 
-RUN useradd --create-home --uid 10001 app && mkdir -p data/uploads artifacts/reports && chown -R app:app data artifacts
+RUN useradd --create-home --uid 10001 app && mkdir -p artifacts/state && chown -R app:app artifacts
 USER app
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 

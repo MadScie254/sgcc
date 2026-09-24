@@ -13,29 +13,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.dependencies.auth import load_api_key, require_api_key
-from backend.routers.analytics import router as analytics_router
-from backend.routers.cases import router as cases_router
-from backend.routers.compare import router as compare_router
-from backend.routers.customers import router as customers_router
-from backend.routers.datasets import router as datasets_router
-from backend.routers.eda import router as eda_router
-from backend.routers.explain import router as explain_router
-from backend.routers.model import router as model_router
-from backend.routers.monitor import router as monitor_router
-from backend.routers.pipeline import router as pipeline_router
-from backend.routers.predict import router as predict_router
-from backend.routers.reports import router as reports_router
-from backend.routers.train import router as train_router
-from backend.services.model import get_model_config, get_trained_model
+from backend.routers import cases, customers, datasets, model, pipeline, predict, reports
+from backend.schemas import Health
+from backend.services.config import environment, scoring_interval_minutes
+from backend.services.datasets import DatasetError, UploadTooLargeError
+from backend.services.errors import NotFoundError
+from backend.services.model import get_model_metrics, get_trained_model
 from backend.services.operations import run_scoring_pipeline
+from backend.services.reports import ReportsUnavailable, reports_status
 
 logger = logging.getLogger(__name__)
 
-IS_DEVELOPMENT = os.getenv("ENV", "development").lower() == "development"
-
-
-# Minutes between automatic scoring runs; 0 runs only at startup.
-SCORING_INTERVAL_MINUTES = float(os.getenv("SCORING_INTERVAL_MINUTES", "0"))
+IS_DEVELOPMENT = environment() == "development"
 
 
 async def _scheduled_scoring(interval_minutes: float) -> None:
@@ -50,20 +39,24 @@ async def _scheduled_scoring(interval_minutes: float) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.api_key = load_api_key()
+    status = reports_status()
+    if not status["available"]:
+        logger.warning(status["detail"])
     try:
         # Warm every cache and record the run, so the pipeline view starts with real timings.
         await asyncio.to_thread(run_scoring_pipeline, "startup")
     except Exception:
         logger.exception("Startup scoring run failed")
-    scheduler = asyncio.create_task(_scheduled_scoring(SCORING_INTERVAL_MINUTES)) if SCORING_INTERVAL_MINUTES > 0 else None
+    interval = scoring_interval_minutes()
+    scheduler = asyncio.create_task(_scheduled_scoring(interval)) if interval > 0 else None
     yield
     if scheduler is not None:
         scheduler.cancel()
 
 
 app = FastAPI(
-    title="SGCC Theft Detector API",
-    version="0.2.0",
+    title="GridSentinel API",
+    version="2.0.0",
     lifespan=lifespan,
     # Interactive docs expose the whole API surface; keep them to development.
     docs_url="/api/docs" if IS_DEVELOPMENT else None,
@@ -71,11 +64,7 @@ app = FastAPI(
     openapi_url="/api/openapi.json" if IS_DEVELOPMENT else None,
 )
 
-allowed_origins = [
-    origin.strip()
-    for origin in os.getenv("FRONTEND_DEV_ORIGIN", "http://localhost:5173").split(",")
-    if origin.strip()
-]
+allowed_origins = [o.strip() for o in os.getenv("FRONTEND_DEV_ORIGIN", "http://localhost:5173").split(",") if o.strip()]
 if IS_DEVELOPMENT:
     allowed_origins.append("http://127.0.0.1:5173")
 app.add_middleware(
@@ -84,6 +73,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH"],
     allow_headers=["Content-Type", "X-API-Key"],
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -96,41 +86,47 @@ async def security_headers(request: Request, call_next):
     return response
 
 
-secured_router_kwargs = {"dependencies": [Depends(require_api_key)]}
-
-for router in (
-    eda_router, train_router, predict_router, customers_router, model_router, explain_router,
-    compare_router, monitor_router, analytics_router, datasets_router, reports_router, pipeline_router, cases_router,
-):
-    app.include_router(router, **secured_router_kwargs)
+for module in (model, customers, cases, pipeline, predict, datasets, reports):
+    app.include_router(module.router, dependencies=[Depends(require_api_key)])
 
 
-@app.get("/api/health")
+@app.get("/api/health", response_model=Health)
 def health():
     try:
-        model_loaded = get_trained_model() is not None
+        get_trained_model()
+        payload = {"status": "ok", "model_loaded": True, "model_version": get_model_metrics()["model_version"]}
     except Exception:
-        model_loaded = False
+        logger.exception("Health check could not load the model")
+        payload = {"status": "degraded", "model_loaded": False, "model_version": "unknown"}
+    payload["reports"] = reports_status()
+    return payload if payload["model_loaded"] else JSONResponse(status_code=503, content=payload)
 
-    try:
-        model_version = get_model_config().get("model", {}).get("version", "unknown")
-    except Exception:
-        model_version = "unknown"
 
-    payload = {
-        "status": "ok" if model_loaded else "degraded",
-        "service": "sgcc-backend",
-        "model_loaded": model_loaded,
-        "model_version": model_version,
-    }
-    return payload if model_loaded else JSONResponse(status_code=503, content=payload)
+@app.exception_handler(NotFoundError)
+async def not_found(request: Request, exc: NotFoundError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(UploadTooLargeError)
+async def upload_too_large(request: Request, exc: UploadTooLargeError):
+    return JSONResponse(status_code=413, content={"detail": str(exc)})
+
+
+@app.exception_handler(DatasetError)
+async def dataset_error(request: Request, exc: DatasetError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(ReportsUnavailable)
+async def reports_unavailable(request: Request, exc: ReportsUnavailable):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    error_id = str(uuid.uuid4())
+async def unhandled_exception(request: Request, exc: Exception):
+    error_id = uuid.uuid4().hex[:12]
     logger.exception("Unhandled error %s on %s %s", error_id, request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal error", "error_id": error_id})
+    return JSONResponse(status_code=500, content={"detail": f"Internal error (reference {error_id})"})
 
 
 frontend_dist = (Path(__file__).resolve().parents[1] / "frontend" / "dist").resolve()
@@ -147,21 +143,15 @@ def resolve_frontend_file(path: str) -> Path | None:
     return None
 
 
-if frontend_dist.exists():
-    assets_dir = frontend_dist / "assets"
-    if assets_dir.exists():
-        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+if (frontend_dist / "index.html").is_file():
+    if (frontend_dist / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
     def serve_frontend(path: str):
         if path == "api" or path.startswith("api/"):
             return JSONResponse(status_code=404, content={"detail": "Not Found"})
-
         file_path = resolve_frontend_file(path)
         if file_path is not None:
             return FileResponse(file_path)
-
-        index_file = frontend_dist / "index.html"
-        if index_file.is_file():
-            return FileResponse(index_file)
-        return JSONResponse(status_code=404, content={"detail": "Frontend build not found"})
+        return FileResponse(frontend_dist / "index.html")

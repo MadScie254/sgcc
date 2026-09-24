@@ -35,12 +35,12 @@ Methodology text to cover, with the evidence already in the repo:
 | 4.3 | `fig-4-3-case-file` | 4.x Explainable case view | *Case file for the highest-risk customer: probability gauge, reading facts, consumption history, SHAP explanation and case activity.* Links the model to an analyst decision. |
 | 4.4 | `fig-4-4-consumption-daily` | same section, or 3.2 | *Daily consumption for the same customer; the shaded area has no readings.* |
 | 4.5 | `fig-4-5-pipeline-scoring` | 4.x Automated scoring pipeline | *Scoring pipeline: ingest → features → score → explain → route, with per-stage timings and run history. Runs at start-up, on demand, or on a schedule.* An end-to-end run takes about 3–4 s for 3,000 customers. |
-| 4.6 | `fig-4-6-pipeline-retraining` | 4.x Model lifecycle / retraining | *Retraining pipeline with the recorded stage timings of the run that produced the deployed model (28 min 50 s, mostly Optuna tuning).* |
+| 4.6 | `fig-4-6-pipeline-training` | 4.x Model lifecycle / retraining | *Training pipeline with the recorded stage timings of the run that produced the deployed model (28 min 50 s, mostly Optuna tuning).* Training replaces the served model, so it runs from the command line only; the console shows its record. |
 | 4.7 | `fig-4-7-threshold-studio` | 4.x Operating-point selection | *Threshold studio at the trained threshold: inspections, thefts caught, hit rate and wasted visits on held-out customers.* |
 | 4.8 | `fig-4-8-threshold-studio-0.50` | same section, next to 4.7 | *The same view at τ = 0.50: fewer, surer inspections (hit rate 79%) at the cost of recall (25%).* Use 4.7 and 4.8 together to show the trade-off is an operational decision. |
 | 4.9 | `fig-4-9-model-performance` | 4.x Monitoring the model in the console | *Model performance page: hold-out metrics, comparison with baselines, and the features that drive the score.* |
-| 4.10 | `fig-4-10-scoring-reports` | 4.x Scoring API and reporting | *Scoring a single customer through the API and generating PDF reports.* |
-| 4.11 | `fig-4-11-settings-api-key` | 4.x Security | *API-key configuration: the key is entered per browser and never shipped in the frontend bundle.* Mention the security fixes: path-traversal fix, constant-time key check, upload limits, gated retraining endpoint. |
+| 4.10 | `fig-4-10-reports-scoring` | 4.x Scoring API and reporting | *Reports and scoring: PDF reports for the portfolio, an uploaded dataset or a case; a file of raw SGCC meter data checked against the model (250 customers, 7 of 17 thefts caught, ROC-AUC 0.82); single-customer scoring.* |
+| 4.11 | `fig-4-11-settings-api-key` | 4.x Security | *API-key configuration: the key is entered per browser and never shipped in the frontend bundle.* Mention the security fixes: path-traversal fix, constant-time key check, upload limits, no retraining through the API. |
 | 4.12 | `fig-4-12-mobile-case-file` | 4.x Responsive design (optional) | *The case file on a phone-sized screen.* |
 
 ## Chapter 5: Results and discussion

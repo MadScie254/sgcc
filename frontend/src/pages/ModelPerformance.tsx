@@ -1,54 +1,31 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { apiErrorMessage, getCompareBaselines, getGlobalShap, getModelMetrics, getTrainingSummary, type BaselineMetrics } from "@/lib/api";
-import { featureLabel } from "@/lib/features";
+import { getModelComparison, getModelDrivers, getModelMetrics, getTrainingSummary } from "@/lib/api";
 import { fmtDateTime, fmtInt, fmtNum } from "@/lib/format";
-import { Card, CardHeader, ErrorState, PageHeader, Skeleton, Stat } from "@/components/ui";
+import { ApiError, Card, CardHeader, PageHeader, Skeleton, Stat } from "@/components/ui";
 import { Legend } from "@/components/charts";
 
-const MODELS: Array<{ key: string; label: string; color: string }> = [
-  { key: "xgboost", label: "XGBoost (in service)", color: "#14161B" },
-  { key: "random_forest", label: "Random forest", color: "#8A919C" },
-  { key: "logistic_regression", label: "Logistic regression", color: "#C4C9D2" },
-];
+const COLORS: Record<string, string> = { xgboost: "#14161B", random_forest: "#8A919C", logistic_regression: "#C4C9D2" };
 
-const METRICS: Array<{ key: keyof BaselineMetrics; label: string }> = [
+const METRICS = [
   { key: "auc", label: "ROC-AUC" },
   { key: "pr_auc", label: "PR-AUC" },
   { key: "f1", label: "F1" },
   { key: "precision", label: "Precision" },
   { key: "recall", label: "Recall" },
-];
+] as const;
+
+const DIRECTION = { higher: "higher → more risk", lower: "lower → more risk", unclear: "no consistent direction" } as const;
 
 export function ModelPerformancePage() {
   const metrics = useQuery({ queryKey: ["model-metrics"], queryFn: getModelMetrics });
-  const compare = useQuery({ queryKey: ["compare"], queryFn: getCompareBaselines });
+  const comparison = useQuery({ queryKey: ["model-comparison"], queryFn: getModelComparison });
   const training = useQuery({ queryKey: ["training-summary"], queryFn: getTrainingSummary });
-  const shap = useQuery({ queryKey: ["global-shap", 400], queryFn: () => getGlobalShap(400), staleTime: Infinity });
+  const drivers = useQuery({ queryKey: ["model-drivers"], queryFn: getModelDrivers, staleTime: Infinity });
 
-  const effects = useMemo(() => {
-    if (!shap.data) return [];
-    const { feature_names, shap_values, feature_values } = shap.data;
-    return feature_names.map((name, j) => {
-      const col = shap_values.map((row) => row[j]);
-      const vals = feature_values.map((row) => row[j]);
-      const meanAbs = col.reduce((s, v) => s + Math.abs(v), 0) / col.length;
-      // Direction: does a higher feature value push towards theft? (rank-free sign of covariance)
-      const pairs = col.map((s, i) => [vals[i], s] as const).filter(([v]) => v !== null) as Array<[number, number]>;
-      const mx = pairs.reduce((s, [v]) => s + v, 0) / Math.max(pairs.length, 1);
-      const ms = pairs.reduce((s, [, v]) => s + v, 0) / Math.max(pairs.length, 1);
-      const cov = pairs.reduce((s, [v, sv]) => s + (v - mx) * (sv - ms), 0);
-      return { name, meanAbs, direction: cov >= 0 ? "higher → more risk" : "lower → more risk" };
-    }).sort((a, b) => b.meanAbs - a.meanAbs).slice(0, 14);
-  }, [shap.data]);
-
-  if (metrics.isError) return <ErrorState message={apiErrorMessage(metrics.error)} />;
+  if (metrics.isError) return <ApiError error={metrics.error} />;
   const m = metrics.data?.metrics;
-  const models: Record<string, Partial<BaselineMetrics>> = {
-    xgboost: (compare.data?.xgboost ?? {}) as Partial<BaselineMetrics>,
-    ...((compare.data?.baselines ?? {}) as Record<string, Partial<BaselineMetrics>>),
-  };
-  const maxEffect = effects[0]?.meanAbs ?? 1;
+  const effects = drivers.data?.drivers ?? [];
+  const maxEffect = effects[0]?.mean_abs_shap || 1;
 
   return (
     <>
@@ -72,18 +49,19 @@ export function ModelPerformancePage() {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1fr]">
         <Card label="Comparison with baselines" className="flex flex-col gap-5 p-[22px]">
           <CardHeader title="Against simpler models" subtitle="Same customers, same split. Baselines use a 0.5 threshold; XGBoost its tuned one." />
-          <Legend items={MODELS.map((x) => ({ color: x.color, label: x.label }))} />
-          {compare.data ? (
+          {comparison.data ? (
+            <>
+            <Legend items={comparison.data.map((row) => ({ color: COLORS[row.model] ?? "#C4C9D2", label: row.label }))} />
             <div className="flex flex-col gap-4">
               {METRICS.map((metric) => (
                 <div key={metric.key} className="grid grid-cols-[88px_1fr] items-center gap-3">
                   <span className="text-[13px] text-ink-2">{metric.label}</span>
                   <div className="flex flex-col gap-1">
-                    {MODELS.map((model) => {
-                      const value = models[model.key]?.[metric.key] as number | undefined;
+                    {comparison.data.map((row) => {
+                      const value = row[metric.key];
                       return (
-                        <div key={model.key} className="flex items-center gap-2" title={`${model.label}: ${fmtNum(value)}`}>
-                          <span className="h-3 rounded-[3px]" style={{ width: `${(value ?? 0) * 100}%`, background: model.color }} />
+                        <div key={row.model} className="flex items-center gap-2" title={`${row.label}: ${fmtNum(value)}`}>
+                          <span className="h-3 rounded-[3px]" style={{ width: `${value * 100}%`, background: COLORS[row.model] ?? "#C4C9D2" }} />
                           <span className="font-mono text-[11px] text-ink-2 tabular">{fmtNum(value)}</span>
                         </div>
                       );
@@ -92,22 +70,23 @@ export function ModelPerformancePage() {
                 </div>
               ))}
             </div>
-          ) : <Skeleton className="h-72" />}
+            </>
+          ) : comparison.isError ? <ApiError error={comparison.error} /> : <Skeleton className="h-72" />}
         </Card>
 
         <Card label="What the model pays attention to" className="flex flex-col gap-4 p-[22px]">
-          <CardHeader title="What drives the score" subtitle={`Mean |SHAP| over ${shap.data?.sample_count ?? "…"} served customers`} />
+          <CardHeader title="What drives the score" subtitle={`Mean |SHAP| over ${drivers.data ? fmtInt(drivers.data.sample_size) : "…"} served customers`} />
           {effects.length ? (
             <ol className="m-0 flex list-none flex-col gap-2 p-0">
               {effects.map((effect) => (
-                <li key={effect.name} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_52px] items-center gap-3 text-[13px]">
-                  <span className="flex flex-col"><span className="font-medium">{featureLabel(effect.name)}</span><span className="text-[11px] text-ink-3">{effect.direction}</span></span>
-                  <span className="h-2.5 rounded-[3px] bg-cobalt" style={{ width: `${(effect.meanAbs / maxEffect) * 100}%` }} />
-                  <span className="text-right font-mono text-xs text-ink-2 tabular">{effect.meanAbs.toFixed(3)}</span>
+                <li key={effect.feature} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_52px] items-center gap-3 text-[13px]">
+                  <span className="flex flex-col"><span className="font-medium">{effect.label}</span><span className="text-[11px] text-ink-3">{DIRECTION[effect.risk_when]}</span></span>
+                  <span className="h-2.5 rounded-[3px] bg-cobalt" style={{ width: `${(effect.mean_abs_shap / maxEffect) * 100}%` }} />
+                  <span className="text-right font-mono text-xs text-ink-2 tabular">{effect.mean_abs_shap.toFixed(3)}</span>
                 </li>
               ))}
             </ol>
-          ) : <Skeleton className="h-80" />}
+          ) : drivers.isError ? <ApiError error={drivers.error} /> : <Skeleton className="h-80" />}
         </Card>
       </div>
 
@@ -117,7 +96,7 @@ export function ModelPerformancePage() {
           {Object.entries(training.data?.best_params ?? {}).map(([key, value]) => (
             <div key={key} className="flex flex-col gap-1 rounded-lg bg-surface-alt px-3.5 py-3">
               <dt className="font-mono text-[11px] text-ink-3">{key}</dt>
-              <dd className="m-0 font-mono text-sm">{typeof value === "number" ? +value.toPrecision(4) : String(value)}</dd>
+              <dd className="m-0 font-mono text-sm">{+value.toPrecision(4)}</dd>
             </div>
           ))}
         </dl>

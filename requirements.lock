@@ -11,10 +11,6 @@ anyio==4.15.1 ; python_full_version < '3.14'
     #   httpx2
     #   starlette
     #   watchfiles
-certifi==2026.7.22 ; python_full_version < '3.14'
-    # via requests
-charset-normalizer==3.5.1 ; python_full_version < '3.14'
-    # via requests
 click==8.5.0 ; python_full_version < '3.14'
     # via uvicorn
 cloudpickle==3.1.2 ; python_full_version < '3.14'
@@ -52,7 +48,6 @@ idna==3.20 ; python_full_version < '3.14'
     # via
     #   anyio
     #   httpx2
-    #   requests
 iniconfig==2.3.0 ; python_full_version < '3.14'
     # via pytest
 joblib==1.5.3 ; python_full_version < '3.14'
@@ -117,8 +112,6 @@ pyyaml==6.0.3 ; python_full_version < '3.14'
     #   sgcc-theft-detector (pyproject.toml)
     #   optuna
     #   uvicorn
-requests==2.34.2 ; python_full_version < '3.14'
-    # via sgcc-theft-detector (pyproject.toml)
 scikit-learn==1.8.0 ; python_full_version < '3.14'
     # via
     #   -c constraints.txt
@@ -173,8 +166,6 @@ typing-inspection==0.4.4 ; python_full_version < '3.14'
     #   pydantic
 tzdata==2026.4 ; python_full_version < '3.14'
     # via pandas
-urllib3==2.8.0 ; python_full_version < '3.14'
-    # via requests
 uvicorn==0.53.0 ; python_full_version < '3.14'
     # via sgcc-theft-detector (pyproject.toml)
 uvloop==0.22.1 ; python_full_version < '3.14' and platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'

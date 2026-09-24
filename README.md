@@ -10,11 +10,11 @@ a FastAPI backend, and a React operations console.
 |---|---|
 | Command center | Headline figures, the scoring pipeline's last run, the investigation queue, risk distribution and outcome at the threshold in service |
 | Case files | Every flagged customer as a case (new → reviewing → dispatched → confirmed / cleared) with notes and history |
-| Case file | Consumption history (monthly/daily, gaps shaded), SHAP waterfall of why it was flagged, case actions |
-| Pipeline | The automated scoring workflow (ingest → features → score → explain → route) with timings and run history, and the retraining pipeline |
+| Case file | Consumption history (monthly/daily, gaps shaded), SHAP waterfall of why it was flagged, case actions, case-file PDF |
+| Pipeline | The automated scoring workflow (ingest → features → score → explain → route) with timings and run history, and the stages of the training run behind the served model |
 | Threshold studio | Trade thefts caught against wasted visits on held-out customers, then publish the threshold to scoring |
 | Model performance | Hold-out metrics, comparison with baselines, what drives the score (mean absolute SHAP), tuned hyperparameters |
-| Scoring & reports | Score one customer, batch-score a CSV, verify a dataset, export PDF reports |
+| Reports & scoring | Portfolio, dataset and case-file PDF reports; upload SGCC meter data (or feature rows) and see how the model scores it, including thefts caught when the file has labels; batch-score a CSV; score one customer |
 
 ## Model
 
@@ -77,6 +77,19 @@ pip install -r requirements.lock
 uvicorn backend.main:app --reload
 ```
 
+Using an existing Anaconda environment instead (Command Prompt):
+
+```bat
+conda activate ml_env
+pip install -r requirements.lock
+uvicorn backend.main:app --reload
+```
+
+Install the lock file into whichever environment you use: it pins the versions the
+model and the PDF reports need (for example `xgboost==3.2.0` and `fpdf2`). If
+`/api/health` reports `"reports": {"available": false}`, the environment has an old
+or missing fpdf2 and the message says how to fix it.
+
 macOS / Linux:
 
 ```bash
@@ -112,9 +125,19 @@ Docker: `docker compose up --build` (set `API_KEY` in `.env` first; see `.env.ex
 ### Automation
 
 The scoring pipeline runs once when the server starts and on demand from the
-Pipeline page. Set `SCORING_INTERVAL_MINUTES` to also run it on a schedule. Case
-statuses, notes, run history and a published threshold are kept in
-`artifacts/state/` (override with `SGCC_STATE_DIR`).
+Pipeline page. Set `SCORING_INTERVAL_MINUTES` to also run it on a schedule.
+Everything the API writes is kept in `artifacts/state/` (override with
+`SGCC_STATE_DIR`): case statuses and notes, run history, a published threshold,
+uploaded datasets (latest 100) and generated reports (latest 500).
+
+### Reports
+
+`POST /api/reports` with `{"kind": "portfolio"}`, `{"kind": "dataset", "dataset_id": ...}`
+or `{"kind": "case", "customer_id": ...}` renders a PDF; `GET /api/reports/{id}/pdf`
+downloads it. The console does both in one click. Uploads (`POST /api/datasets`) and
+batch scoring (`POST /api/predict/batch`) accept either the SGCC layout (`CONS_NO`,
+optional `FLAG`, one column per day; features are built exactly as in training) or
+rows of the 85 model features. Anything else is rejected with a reason.
 
 ### Test the integrated model
 
@@ -125,8 +148,8 @@ python scripts/evaluate_api.py --url http://127.0.0.1:8000 --key "$API_KEY"
 ```
 
 It checks hold-out ROC-AUC and precision through the API, that every endpoint scores
-a customer identically, that SHAP values add up to each prediction, and that publishing
-a threshold re-flags customers and opens cases.
+a customer identically, that SHAP values add up to each prediction, that publishing
+a threshold re-flags customers and opens cases, and that a PDF report downloads.
 
 ## Train
 
@@ -138,17 +161,19 @@ python -m src.train                # full run: 40 Optuna trials, 5-fold CV
 
 Training writes the model, `artifacts/metrics.json`, `artifacts/feature_importance.csv`,
 `artifacts/best_params.json`, the baseline comparison, and a fresh demo population.
-Settings live in `config.yaml`.
+Settings live in `config.yaml`. Training replaces the served model, so it runs from the
+command line only; afterwards press **Run scoring now** on the Pipeline page (or restart
+the API) to load the new model.
 
 ## Security
 
 - Outside `ENV=development` the API requires `API_KEY`; every `/api/*` route except
   `/api/health` checks the `X-API-Key` header. Enter the key on the dashboard's
   **Settings** page; it is stored in that browser only and never built into the JavaScript.
-- `POST /api/train/jobs` overwrites the served model, so it is disabled outside
-  development unless `ENABLE_TRAINING_API=1`. Clients can only change trial count,
-  CV folds, timeout, and test size.
-- Uploads are capped at `MAX_UPLOAD_MB` (default 25).
+- The API cannot retrain or replace the model.
+- Uploads are capped at `MAX_UPLOAD_MB` (default 25), 200,000 rows and 2,000 columns.
+  Batch-score CSVs neutralise cells that a spreadsheet would run as formulas.
+- Report and dataset ids are validated before any file is touched.
 - API docs (`/api/docs`) are only served in development.
 
 ## Deploy (Render)
@@ -161,9 +186,9 @@ Settings page.
 ## Layout
 
 - `src/` data loading, features, tuning, evaluation, training pipeline
-- `backend/` FastAPI app (`routers/`, `services/`, `schemas/`)
+- `backend/` FastAPI app (`routers/`, `services/`, `schemas.py`)
 - `frontend/` React + Vite dashboard
 - `models/`, `artifacts/` trained model and metrics the API reads
 - `data/sgcc_demo.csv.gz` held-out customers the API serves
-- `scripts/download_data.py` dataset download
+- `scripts/` dataset download, API evaluation, ablation study, thesis figures
 - `concept_note/` project concept note

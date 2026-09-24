@@ -3,8 +3,7 @@ SGCC Theft Detector - Feature Engineering Module
 
 Turns each customer's daily consumption series into a fixed-length feature
 vector. ``build_features_wide`` works on the whole customer-by-day matrix at
-once with NumPy; the ``compute_*`` helpers describe a single series and back
-the API's per-customer summaries.
+once with NumPy.
 
 Missing readings (NaN) are kept as signal: in SGCC, gaps and zero runs are
 among the strongest theft indicators, and XGBoost handles NaN natively.
@@ -16,9 +15,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy.stats import skew
-
-from .data_loader import long_to_wide
 
 logger = logging.getLogger(__name__)
 
@@ -32,108 +28,6 @@ DEFAULT_FEATURE_CONFIG = {
     "start_date": "2014-01-01",
 }
 
-
-# ---------------------------------------------------------------------------
-# Single-series helpers
-# ---------------------------------------------------------------------------
-
-def compute_statistical_features(consumption: np.ndarray) -> dict:
-    """Location and spread statistics of the observed readings."""
-    valid = consumption[~np.isnan(consumption)]
-    if len(valid) == 0:
-        return dict.fromkeys(["mean", "median", "std", "coef_var", "min", "max", "range", "skewness"], 0.0)
-
-    mean_val = float(np.mean(valid))
-    std_val = float(np.std(valid))
-    return {
-        "mean": mean_val,
-        "median": float(np.median(valid)),
-        "std": std_val,
-        "coef_var": std_val / mean_val if mean_val > 0 else 0.0,
-        "min": float(np.min(valid)),
-        "max": float(np.max(valid)),
-        "range": float(np.max(valid) - np.min(valid)),
-        "skewness": float(skew(valid)) if len(valid) > 1 and std_val > 0 else 0.0,
-    }
-
-
-def _slope(y: np.ndarray) -> float:
-    x = np.arange(len(y), dtype=float)
-    ok = ~np.isnan(y)
-    if ok.sum() < 2:
-        return 0.0
-    x, y = x[ok], y[ok]
-    x_c = x - x.mean()
-    denom = float((x_c ** 2).sum())
-    return float((x_c * (y - y.mean())).sum() / denom) if denom > 0 else 0.0
-
-
-def compute_trend_features(consumption: np.ndarray) -> dict:
-    """Least-squares slope (kWh/day) over the full series and the last 30/90 days."""
-    consumption = np.asarray(consumption, dtype=float)
-    return {
-        "slope_full": _slope(consumption),
-        "slope_last_30d": _slope(consumption[-30:]),
-        "slope_last_90d": _slope(consumption[-90:]),
-    }
-
-
-def compute_anomaly_features(consumption: np.ndarray, sudden_drop_threshold: float = 0.5) -> dict:
-    """Zero days, day-over-day drops larger than the threshold, and volatility."""
-    consumption = np.asarray(consumption, dtype=float)
-    valid = consumption[~np.isnan(consumption)]
-    if len(valid) < 2:
-        return {"zero_day_count": 0, "sudden_drop_count": 0, "volatility_index": 0.0}
-
-    prev, cur = consumption[:-1], consumption[1:]
-    comparable = ~np.isnan(prev) & ~np.isnan(cur) & (prev > 0)
-    drops = np.zeros_like(prev)
-    drops[comparable] = (prev[comparable] - cur[comparable]) / prev[comparable]
-
-    mean_val = float(np.mean(valid))
-    return {
-        "zero_day_count": int(np.sum(valid == 0)),
-        "sudden_drop_count": int(np.sum(drops > sudden_drop_threshold)),
-        "volatility_index": float(np.std(valid) / mean_val) if mean_val > 0 else 0.0,
-    }
-
-
-def compute_temporal_features(consumption: np.ndarray, day_of_week: Optional[np.ndarray] = None) -> dict:
-    """Weekday/weekend ratio and share of peak days. Assumes day 0 is a Monday without dates."""
-    consumption = np.asarray(consumption, dtype=float)
-    if day_of_week is None:
-        day_of_week = np.arange(len(consumption)) % 7
-    ok = ~np.isnan(consumption)
-    if ok.sum() < 7:
-        return {"weekday_vs_weekend_ratio": 1.0, "peak_day_ratio": 0.0}
-
-    weekday = consumption[ok & (day_of_week < 5)]
-    weekend = consumption[ok & (day_of_week >= 5)]
-    weekday_mean = float(weekday.mean()) if len(weekday) else 0.0
-    weekend_mean = float(weekend.mean()) if len(weekend) else 0.0
-
-    valid = consumption[ok]
-    return {
-        "weekday_vs_weekend_ratio": weekday_mean / weekend_mean if weekend_mean > 0 else 1.0,
-        "peak_day_ratio": float(np.mean(valid >= np.percentile(valid, 90))),
-    }
-
-
-def compute_other_features(consumption: np.ndarray, missing_sequence_threshold: int = 3) -> dict:
-    """Lag-1 autocorrelation and the number of missing runs longer than the threshold."""
-    consumption = np.asarray(consumption, dtype=float)
-    missing = np.isnan(consumption)
-    _, runs = _run_lengths(missing[None, :], missing_sequence_threshold)
-    autocorr = pd.Series(consumption).autocorr(lag=1) if (~missing).sum() > 2 else 0.0
-    return {
-        "autocorr_lag1": float(autocorr) if not np.isnan(autocorr) else 0.0,
-        "missing_sequences_count": int(runs[0]),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Vectorised feature matrix
-# ---------------------------------------------------------------------------
 
 def _safe_div(num, den, fill=0.0):
     num = np.asarray(num, dtype=float)
@@ -314,19 +208,3 @@ def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None) -> pd
     X = pd.DataFrame(f, index=wide.index)
     return X.replace([np.inf, -np.inf], np.nan).astype("float32")
 
-
-def build_features(
-    df_long: pd.DataFrame,
-    labels: pd.Series,
-    config: Optional[dict] = None,
-) -> Tuple[pd.DataFrame, pd.Series]:
-    """
-    Build features from long-format data [customer_id, day_index, consumption_kwh].
-
-    Returns (X, y) with X indexed by customer id in first-appearance order.
-    """
-    wide = long_to_wide(df_long)
-    X = build_features_wide(wide, config)
-    y = labels.reindex(X.index)
-    logger.info("Built %d features for %d customers", X.shape[1], X.shape[0])
-    return X, y

@@ -1,26 +1,27 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from typing import List
 
-from backend.schemas.api import DatasetCatalogResponse, DatasetUploadResponse
-from backend.services.reporting import get_uploaded_dataset, load_upload_catalog, register_uploaded_dataset
+from fastapi import APIRouter, File, UploadFile
+from fastapi.concurrency import run_in_threadpool
+
+from backend.schemas import Dataset
+from backend.services.datasets import get_dataset, list_datasets, read_upload, register_upload
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
 
-@router.get("/catalog", response_model=DatasetCatalogResponse)
-def catalog() -> DatasetCatalogResponse:
-    return DatasetCatalogResponse(items=load_upload_catalog())
+@router.get("", response_model=List[Dataset])
+def datasets():
+    return list_datasets()
 
 
-@router.get("/{dataset_id}", response_model=DatasetUploadResponse)
-def dataset(dataset_id: str) -> DatasetUploadResponse:
-    try:
-        return DatasetUploadResponse(item=get_uploaded_dataset(dataset_id))
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@router.post("", response_model=Dataset, status_code=201)
+async def upload(file: UploadFile = File(...)):
+    content = await read_upload(file)
+    return await run_in_threadpool(register_upload, file.filename or "upload.csv", content)
 
 
-@router.post("/upload", response_model=DatasetUploadResponse)
-async def upload(file: UploadFile = File(...)) -> DatasetUploadResponse:
-    return DatasetUploadResponse(item=await register_uploaded_dataset(file))
+@router.get("/{dataset_id}", response_model=Dataset)
+def dataset(dataset_id: str):
+    return get_dataset(dataset_id)
