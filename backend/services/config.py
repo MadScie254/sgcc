@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
@@ -28,4 +29,6 @@ def get_project_paths() -> Dict[str, Path]:
         "uploads": BASE_DIR / paths.get("uploads", "data/uploads"),
         "reports": BASE_DIR / paths.get("reports", "artifacts/reports"),
         "data": BASE_DIR / "data",
+        # Runtime state (cases, pipeline runs, operating threshold); not committed.
+        "state": BASE_DIR / os.getenv("SGCC_STATE_DIR", "artifacts/state"),
     }

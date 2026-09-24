@@ -27,5 +27,35 @@
   "n_trials": 40,
   "train_customers": 33897,
   "test_customers": 8475,
-  "n_features": 85
+  "n_features": 85,
+  "stages": [
+    {
+      "name": "Load",
+      "seconds": 17.66
+    },
+    {
+      "name": "Features",
+      "seconds": 34.17
+    },
+    {
+      "name": "Tune",
+      "seconds": 1604.02
+    },
+    {
+      "name": "Threshold",
+      "seconds": 36.2
+    },
+    {
+      "name": "Evaluate",
+      "seconds": 8.28
+    },
+    {
+      "name": "Baselines",
+      "seconds": 25.32
+    },
+    {
+      "name": "Publish",
+      "seconds": 4.12
+    }
+  ]
 }

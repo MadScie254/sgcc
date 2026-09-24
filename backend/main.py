@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -13,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.dependencies.auth import load_api_key, require_api_key
 from backend.routers.analytics import router as analytics_router
+from backend.routers.cases import router as cases_router
 from backend.routers.compare import router as compare_router
 from backend.routers.customers import router as customers_router
 from backend.routers.datasets import router as datasets_router
@@ -20,26 +22,43 @@ from backend.routers.eda import router as eda_router
 from backend.routers.explain import router as explain_router
 from backend.routers.model import router as model_router
 from backend.routers.monitor import router as monitor_router
+from backend.routers.pipeline import router as pipeline_router
 from backend.routers.predict import router as predict_router
 from backend.routers.reports import router as reports_router
 from backend.routers.train import router as train_router
-from backend.services.model import get_customer_rankings, get_model_config, get_shap_explainer, get_trained_model
+from backend.services.model import get_model_config, get_trained_model
+from backend.services.operations import run_scoring_pipeline
 
 logger = logging.getLogger(__name__)
 
 IS_DEVELOPMENT = os.getenv("ENV", "development").lower() == "development"
 
 
+# Minutes between automatic scoring runs; 0 runs only at startup.
+SCORING_INTERVAL_MINUTES = float(os.getenv("SCORING_INTERVAL_MINUTES", "0"))
+
+
+async def _scheduled_scoring(interval_minutes: float) -> None:
+    while True:
+        await asyncio.sleep(interval_minutes * 60)
+        try:
+            await asyncio.to_thread(run_scoring_pipeline, "schedule")
+        except Exception:
+            logger.exception("Scheduled scoring run failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.api_key = load_api_key()
     try:
-        get_trained_model()
-        get_shap_explainer()
-        get_customer_rankings()
+        # Warm every cache and record the run, so the pipeline view starts with real timings.
+        await asyncio.to_thread(run_scoring_pipeline, "startup")
     except Exception:
-        logger.exception("Backend startup warmup failed")
+        logger.exception("Startup scoring run failed")
+    scheduler = asyncio.create_task(_scheduled_scoring(SCORING_INTERVAL_MINUTES)) if SCORING_INTERVAL_MINUTES > 0 else None
     yield
+    if scheduler is not None:
+        scheduler.cancel()
 
 
 app = FastAPI(
@@ -63,7 +82,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "PATCH"],
     allow_headers=["Content-Type", "X-API-Key"],
 )
 
@@ -81,7 +100,7 @@ secured_router_kwargs = {"dependencies": [Depends(require_api_key)]}
 
 for router in (
     eda_router, train_router, predict_router, customers_router, model_router, explain_router,
-    compare_router, monitor_router, analytics_router, datasets_router, reports_router,
+    compare_router, monitor_router, analytics_router, datasets_router, reports_router, pipeline_router, cases_router,
 ):
     app.include_router(router, **secured_router_kwargs)
 

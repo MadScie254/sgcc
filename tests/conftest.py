@@ -1,5 +1,7 @@
 """Shared pytest fixtures."""
 
+import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +9,9 @@ import pandas as pd
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Keep API runtime state (cases, pipeline runs, published threshold) out of the repo.
+os.environ.setdefault("SGCC_STATE_DIR", tempfile.mkdtemp(prefix="sgcc-state-"))
 DEMO_DATASET = REPO_ROOT / "data" / "sgcc_demo.csv.gz"
 
 

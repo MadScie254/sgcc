@@ -124,3 +124,59 @@ def test_upload_and_pdf_report(client, tmp_path, monkeypatch):
     pdf = client.get(report.json()["download_url"])
     assert pdf.status_code == 200
     assert pdf.content.startswith(b"%PDF")
+
+
+def test_scoring_pipeline_run_records_stages(client):
+    run = client.post("/api/pipeline/runs").json()
+    assert run["status"] == "succeeded"
+    assert [s["key"] for s in run["stages"]] == ["ingest", "features", "score", "explain", "route"]
+    assert run["summary"]["flagged"] == client.get("/api/model/metrics").json()["flagged_today"]
+    assert client.get("/api/pipeline/runs", params={"limit": 1}).json()[0]["run_id"] == run["run_id"]
+    assert client.get("/api/pipeline/config").json()["run_on_startup"] is True
+    assert client.get("/api/pipeline/training").json()["n_features"] == 85
+
+
+def test_case_workflow(client, customer_id):
+    listing = client.get("/api/cases", params={"page_size": 5}).json()
+    assert listing["total"] == client.get("/api/model/metrics").json()["flagged_today"]
+    assert listing["items"][0]["top_driver"]["shap_value"] > 0
+
+    updated = client.patch(f"/api/cases/{customer_id}", json={"status": "dispatched", "note": "check seal"}).json()
+    assert updated["status"] == "dispatched"
+    assert updated["note"] == "check seal"
+    assert any("dispatched" in event["event"] for event in updated["history"])
+    assert client.get("/api/cases", params={"status": "dispatched"}).json()["total"] >= 1
+
+    assert client.patch(f"/api/cases/{customer_id}", json={"status": "bogus"}).status_code == 422
+    assert client.patch("/api/cases/nope", json={"status": "cleared"}).status_code == 404
+
+
+def test_publish_threshold_rescores_and_resets(client):
+    before = client.get("/api/model/metrics").json()
+    raised = client.put("/api/model/threshold", json={"threshold": 0.6}).json()
+    assert raised["threshold"] == 0.6
+    assert raised["flagged_today"] < before["flagged_today"]
+    assert raised["trained_threshold"] == before["trained_threshold"]
+
+    restored = client.put("/api/model/threshold", json={"threshold": None}).json()
+    assert restored["threshold"] == before["trained_threshold"]
+    assert restored["flagged_today"] == before["flagged_today"]
+    assert client.put("/api/model/threshold", json={"threshold": 1.5}).status_code == 422
+
+
+def test_operating_curve_and_distribution_match_population(client):
+    curve = client.get("/api/model/operating-curve").json()
+    population = client.get("/api/model/metrics").json()["customers_monitored"]
+    assert all(p["tp"] + p["fp"] + p["fn"] + p["tn"] == population for p in curve)
+    recalls = [p["recall"] for p in curve]
+    assert recalls == sorted(recalls, reverse=True)
+    dist = client.get("/api/model/score-distribution").json()
+    assert sum(dist["honest"]) + sum(dist["theft"]) == population
+
+
+def test_served_model_quality(client):
+    """The integrated model keeps its hold-out quality on the customers the API serves."""
+    trained = client.get("/api/model/metrics").json()["trained_threshold"]
+    preview = client.get("/api/predict/threshold-preview", params={"threshold": trained}).json()
+    assert preview["metrics"]["auc"] > 0.8
+    assert preview["metrics"]["precision"] > 0.4

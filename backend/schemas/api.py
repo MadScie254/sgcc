@@ -119,6 +119,9 @@ class CustomersResponse(BaseModel):
 
 class ModelMetricsResponse(BaseModel):
     threshold: float
+    trained_threshold: Optional[float] = None
+    model_version: Optional[str] = None
+    trained_at: Optional[str] = None
     metrics: Dict[str, float]
     support: Dict[str, int]
     confusion_matrix: Dict[str, int]

@@ -60,8 +60,42 @@ def get_saved_metrics() -> Dict[str, Any]:
     return json.loads(metrics_path.read_text(encoding="utf-8"))
 
 
-def get_decision_threshold() -> float:
+def get_trained_threshold() -> float:
+    """Threshold chosen during training (max out-of-fold F1)."""
     return float(get_saved_metrics().get("threshold", 0.5))
+
+
+def _operating_threshold_path() -> Path:
+    return get_project_paths()["state"] / "operating_threshold.json"
+
+
+@lru_cache(maxsize=1)
+def get_operating_threshold_override() -> Optional[float]:
+    path = _operating_threshold_path()
+    if not path.is_file():
+        return None
+    try:
+        value = float(json.loads(path.read_text(encoding="utf-8"))["threshold"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    return value if 0.0 < value < 1.0 else None
+
+
+def set_operating_threshold(threshold: Optional[float]) -> None:
+    """Publish an operating threshold for scoring, or None to return to the trained one."""
+    path = _operating_threshold_path()
+    if threshold is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"threshold": float(threshold)}), encoding="utf-8")
+    clear_caches()
+
+
+def get_decision_threshold() -> float:
+    """Threshold in service: a published operating threshold, else the trained one."""
+    override = get_operating_threshold_override()
+    return override if override is not None else get_trained_threshold()
 
 
 def risk_tier_for_probability(probability: float, threshold: Optional[float] = None) -> str:
@@ -130,6 +164,9 @@ def get_model_metrics() -> Dict[str, Any]:
 
     return {
         "threshold": threshold,
+        "trained_threshold": get_trained_threshold(),
+        "model_version": str(saved.get("model_version", get_config().get("model", {}).get("version", "unknown"))),
+        "trained_at": saved.get("trained_at"),
         "metrics": {
             key: float(saved.get(key, 0.0))
             for key in ("recall", "precision", "f1", "accuracy", "auc", "pr_auc", "gmean", "mcc")
@@ -320,3 +357,63 @@ def threshold_preview(threshold: float) -> Dict[str, object]:
         },
         "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
     }
+
+
+@lru_cache(maxsize=1)
+def operating_curve() -> List[Dict[str, float]]:
+    """Confusion counts, precision and recall across thresholds on the served (held-out) customers."""
+    _, y = get_feature_matrix()
+    y_true = y.to_numpy()
+    probabilities = get_population_probabilities().reindex(y.index.astype(str)).to_numpy()
+    points = []
+    for threshold in np.round(np.arange(0.02, 0.99, 0.02), 2):
+        predicted = probabilities >= threshold
+        tp = int((predicted & (y_true == 1)).sum())
+        fp = int((predicted & (y_true == 0)).sum())
+        fn = int((~predicted & (y_true == 1)).sum())
+        tn = int((~predicted & (y_true == 0)).sum())
+        points.append({
+            "threshold": float(threshold), "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "precision": tp / (tp + fp) if tp + fp else 1.0,
+            "recall": tp / (tp + fn) if tp + fn else 0.0,
+        })
+    return points
+
+
+@lru_cache(maxsize=1)
+def score_distribution(bins: int = 20) -> Dict[str, Any]:
+    """Histogram of theft probabilities, split by the dataset label."""
+    _, y = get_feature_matrix()
+    probabilities = get_population_probabilities().reindex(y.index.astype(str)).to_numpy()
+    labels = y.to_numpy()
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    return {
+        "edges": edges.round(4).tolist(),
+        "honest": np.histogram(probabilities[labels == 0], bins=edges)[0].astype(int).tolist(),
+        "theft": np.histogram(probabilities[labels == 1], bins=edges)[0].astype(int).tolist(),
+        "threshold": get_decision_threshold(),
+    }
+
+
+@lru_cache(maxsize=1)
+def get_flagged_drivers() -> Dict[str, Dict[str, Any]]:
+    """Strongest SHAP driver (pushing towards theft) for every customer at or above the threshold."""
+    probabilities = get_population_probabilities()
+    flagged = probabilities[probabilities >= get_decision_threshold()].index
+    if len(flagged) == 0:
+        return {}
+    X, _ = get_feature_matrix()
+    frame = X.loc[flagged, get_feature_names()]
+    values = get_shap_explainer().shap_values(frame)
+    if isinstance(values, list):
+        values = values[-1]
+    values = np.asarray(values, dtype=float)
+    drivers = {}
+    for row, customer_id in enumerate(flagged):
+        idx = int(np.argmax(values[row]))
+        drivers[str(customer_id)] = {
+            "feature": frame.columns[idx],
+            "value": finite_or_none(frame.iat[row, idx]),
+            "shap_value": float(values[row, idx]),
+        }
+    return drivers

@@ -1,8 +1,20 @@
-# SGCC Theft Detector
+# GridSentinel — SGCC Theft Detector
 
 Electricity-theft detection on the SGCC smart-meter dataset (42,372 customers,
-daily kWh from 2014-01-01 to 2016-10-31, ~8.5% labelled theft), with a FastAPI
-backend and a React dashboard.
+daily kWh from 2014-01-01 to 2016-10-31, ~8.5% labelled theft): an XGBoost model,
+a FastAPI backend, and a React operations console.
+
+## The console
+
+| Page | What it does |
+|---|---|
+| Command center | Headline figures, the scoring pipeline's last run, the investigation queue, risk distribution and outcome at the threshold in service |
+| Case files | Every flagged customer as a case (new → reviewing → dispatched → confirmed / cleared) with notes and history |
+| Case file | Consumption history (monthly/daily, gaps shaded), SHAP waterfall of why it was flagged, case actions |
+| Pipeline | The automated scoring workflow (ingest → features → score → explain → route) with timings and run history, and the retraining pipeline |
+| Threshold studio | Trade thefts caught against wasted visits on held-out customers, then publish the threshold to scoring |
+| Model performance | Hold-out metrics, comparison with baselines, what drives the score (mean absolute SHAP), tuned hyperparameters |
+| Scoring & reports | Score one customer, batch-score a CSV, verify a dataset, export PDF reports |
 
 ## Model
 
@@ -56,6 +68,25 @@ For a single server, run `npm run build` in `frontend/` and open
 `http://127.0.0.1:8000/`; the backend serves `frontend/dist`.
 
 Docker: `docker compose up --build` (set `API_KEY` in `.env` first; see `.env.example`).
+
+### Automation
+
+The scoring pipeline runs once when the server starts and on demand from the
+Pipeline page. Set `SCORING_INTERVAL_MINUTES` to also run it on a schedule. Case
+statuses, notes, run history and a published threshold are kept in
+`artifacts/state/` (override with `SGCC_STATE_DIR`).
+
+### Test the integrated model
+
+With the API running:
+
+```bash
+python scripts/evaluate_api.py --url http://127.0.0.1:8000 --key "$API_KEY"
+```
+
+It checks hold-out ROC-AUC and precision through the API, that every endpoint scores
+a customer identically, that SHAP values add up to each prediction, and that publishing
+a threshold re-flags customers and opens cases.
 
 ## Train
 

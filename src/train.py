@@ -13,6 +13,7 @@ dataset the API serves (a sample of held-out customers).
 import argparse
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -62,6 +63,13 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
     random_state = int(config["random_state"])
     data_cfg, model_cfg, eval_cfg = config["data"], config["model"], config["evaluation"]
     paths = {key: _resolve(value) for key, value in config["paths"].items()}
+    stages = []
+    clock = [time.perf_counter()]
+
+    def mark(name: str) -> None:
+        now = time.perf_counter()
+        stages.append({"name": name, "seconds": round(now - clock[0], 2)})
+        clock[0] = now
 
     # 1. Data
     source = _resolve(data_path or data_cfg["training_data_path"])
@@ -74,11 +82,13 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         keep, _ = train_test_split(labels.index, train_size=fraction, stratify=labels, random_state=random_state)
         wide, labels = wide.loc[keep], labels.loc[keep]
         logger.info("Quick mode: sampled %d customers", len(labels))
+    mark("Load")
 
     # 2. Features
     X = build_features_wide(wide, config.get("features"))
     y = labels.reindex(X.index).astype(int)
     logger.info("Feature matrix: %d customers x %d features", *X.shape)
+    mark("Features")
 
     # 3. Split by customer
     X_train, X_test, y_train, y_test = train_test_split(
@@ -97,6 +107,7 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         metric=optuna_cfg.get("metric", "average_precision"),
         timeout=optuna_cfg.get("timeout"),
     )
+    mark("Tune")
 
     # 5. Threshold from out-of-fold predictions on the training split
     oof = cross_val_proba(best_params, X_train, y_train, cv=int(tuning["cv_folds"]), random_state=random_state)
@@ -106,6 +117,7 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         min_precision=float(eval_cfg.get("min_precision", 0.5)),
     )
     logger.info("Decision threshold: %.4f", threshold)
+    mark("Threshold")
 
     # 6. Final fit and hold-out evaluation
     model = get_xgb_model(best_params, random_state=random_state)
@@ -122,14 +134,15 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         "test_customers": int(len(X_test)),
         "n_features": int(X.shape[1]),
     })
+    mark("Evaluate")
+
+    baselines = evaluate_baselines(X_train, y_train, X_test, y_test, random_state=random_state)
+    mark("Baselines")
 
     # 7. Persist artifacts
     save_model(model, str(paths["model_file"]))
-    save_json(metrics, str(paths["artifacts"] / "metrics.json"))
     save_json(best_params, str(paths["artifacts"] / "best_params.json"))
     feature_importance(model, X.columns).to_csv(paths["artifacts"] / "feature_importance.csv", index=False)
-
-    baselines = evaluate_baselines(X_train, y_train, X_test, y_test, random_state=random_state)
     save_json(baselines, str(paths["models"] / "baselines" / "comparison_results.json"))
 
     demo_size = min(int(config["serving"]["demo_customers"]), len(X_test))
@@ -137,6 +150,9 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         X_test.index, train_size=demo_size, stratify=y_test, random_state=random_state,
     ) if demo_size < len(X_test) else (X_test.index, None)
     write_demo_dataset(wide.loc[demo_ids], labels, _resolve(data_cfg["serving_data_path"]))
+    mark("Publish")
+    metrics["stages"] = stages
+    save_json(metrics, str(paths["artifacts"] / "metrics.json"))
 
     return {
         "best_score": float(study.best_value),

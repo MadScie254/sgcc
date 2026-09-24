@@ -1,23 +1,25 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/layouts/AppShell";
-import { OverviewPage } from "@/pages/Overview";
-import { AnalyticsPage } from "@/pages/Analytics";
-import { PredictPage } from "@/pages/Predict";
-import { ExplainPage } from "@/pages/Explain";
-import { MonitorPage } from "@/pages/Monitor";
-import { CustomersPage } from "@/pages/Customers";
+import { CommandCenterPage } from "@/pages/CommandCenter";
+import { CasesPage } from "@/pages/Cases";
+import { CaseFilePage } from "@/pages/CaseFile";
+import { PipelinePage } from "@/pages/Pipeline";
+import { ThresholdStudioPage } from "@/pages/ThresholdStudio";
+import { ModelPerformancePage } from "@/pages/ModelPerformance";
+import { ScoringPage } from "@/pages/Scoring";
 import { SettingsPage } from "@/pages/Settings";
 
 export default function App() {
   return (
     <AppShell>
       <Routes>
-        <Route path="/" element={<OverviewPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/predict" element={<PredictPage />} />
-        <Route path="/explain" element={<ExplainPage />} />
-        <Route path="/monitor" element={<MonitorPage />} />
-        <Route path="/customers" element={<CustomersPage />} />
+        <Route path="/" element={<CommandCenterPage />} />
+        <Route path="/cases" element={<CasesPage />} />
+        <Route path="/cases/:customerId" element={<CaseFilePage />} />
+        <Route path="/pipeline" element={<PipelinePage />} />
+        <Route path="/threshold" element={<ThresholdStudioPage />} />
+        <Route path="/model" element={<ModelPerformancePage />} />
+        <Route path="/scoring" element={<ScoringPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

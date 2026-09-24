@@ -1,119 +1,104 @@
-import type { FormEvent, ReactNode } from "react";
-import { useMemo, useState } from "react";
-import { useNavigate, NavLink } from "react-router-dom";
-import { Activity, BarChart3, FileText, LayoutDashboard, Search, Settings, Target, Users } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getHealth } from "@/lib/api";
-import { cn } from "@/components/ui/primitives";
+import { Activity, Gauge, LayoutGrid, Menu, Search, Settings, SlidersHorizontal, Workflow, X, FileText } from "lucide-react";
+import { getModelMetrics, getPipelineRuns } from "@/lib/api";
+import { fmtRelative } from "@/lib/format";
+import { cn } from "@/lib/cn";
 
-const navItems = [
-  { to: "/", label: "Overview", icon: LayoutDashboard },
-  { to: "/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/predict", label: "Predict", icon: Target },
-  { to: "/explain", label: "Explain", icon: FileText },
-  { to: "/monitor", label: "Monitor", icon: Activity },
-  { to: "/customers", label: "Customers", icon: Users },
+const NAV = [
+  { to: "/", label: "Command center", icon: LayoutGrid, end: true },
+  { to: "/cases", label: "Case files", icon: Search },
+  { to: "/pipeline", label: "Pipeline", icon: Workflow },
+  { to: "/threshold", label: "Threshold studio", icon: SlidersHorizontal },
+  { to: "/model", label: "Model performance", icon: Gauge },
+  { to: "/scoring", label: "Scoring & reports", icon: FileText },
 ];
 
-export function AppShell({ children }: { children: ReactNode }) {
-  const navigate = useNavigate();
-  const [search, setSearch] = useState("");
-  const healthQuery = useQuery({ queryKey: ["health"], queryFn: getHealth, refetchInterval: 30_000 });
+function Logo() {
+  return (
+    <div className="flex items-center gap-2.5 px-2">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#F3F2EE" strokeWidth="1.6" aria-hidden>
+        <path d="M14 2 L25 8 V20 L14 26 L3 20 V8 Z" />
+        <path d="M15.5 7 L10 15 H14 L12.5 21 L18 13 H14 Z" fill="#E0873A" stroke="none" />
+      </svg>
+      <div className="flex flex-col">
+        <span className="font-display text-lg font-semibold text-ground">GridSentinel</span>
+        <span className="text-[11px] uppercase tracking-[0.08em] text-night-muted">Revenue protection</span>
+      </div>
+    </div>
+  );
+}
 
-  const modelLive = healthQuery.isSuccess && healthQuery.data?.status === "ok";
-  const statusText = modelLive ? "Model live" : healthQuery.isError ? "API offline" : "Checking...";
-
-  const avatar = useMemo(() => "SG", []);
-
-  function submitSearch(event: FormEvent) {
-    event.preventDefault();
-    const value = search.trim();
-    if (!value) return;
-    navigate(`/customers?search=${encodeURIComponent(value)}`);
-  }
+function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
+  const metrics = useQuery({ queryKey: ["model-metrics"], queryFn: getModelMetrics });
+  const runs = useQuery({ queryKey: ["pipeline-runs"], queryFn: () => getPipelineRuns(1), refetchInterval: 30_000 });
+  const lastRun = runs.data?.[0];
 
   return (
-    <div className="min-h-screen bg-bg text-primary">
-      <div className="grid min-h-screen lg:grid-cols-[260px_1fr]">
-        <aside className="border-b border-border bg-surface lg:min-h-screen lg:border-b-0 lg:border-r">
-          <div className="flex h-full flex-col px-4 py-5 lg:px-5">
-            <div className="space-y-1 border-b border-border pb-4">
-              <div className="text-xs uppercase tracking-[0.22em] text-secondary">SGCC Theft Detector</div>
-              <div className="text-xl font-semibold tracking-tight text-primary">Operations Console</div>
-              <div className="text-sm leading-6 text-secondary">A compact dashboard for risk review, prediction, explainability, and monitoring.</div>
-            </div>
+    <div className="flex h-full flex-col gap-7 px-4 py-7">
+      <Logo />
+      <nav aria-label="Primary" className="flex flex-col gap-0.5">
+        {NAV.map(({ to, label, icon: Icon, end }) => (
+          <NavLink key={to} to={to} end={end} onClick={onNavigate}
+            className={({ isActive }) => cn("flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+              isActive ? "bg-night-2 font-medium text-white" : "text-night-text hover:bg-night-2/60 hover:text-white")}>
+            <Icon className="h-[18px] w-[18px]" strokeWidth={1.7} aria-hidden />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+      <div className="mt-auto flex flex-col gap-3">
+        <div className="flex flex-col gap-2 rounded-lg border border-night-line px-3 py-3.5">
+          <span className="text-[11px] uppercase tracking-[0.08em] text-night-muted">Model in service</span>
+          <span className="font-mono text-[13px] text-ground">xgb v{metrics.data?.model_version ?? "…"}</span>
+          <span className="text-xs text-night-muted">τ {metrics.data ? metrics.data.threshold.toFixed(3) : "…"} · AUC {metrics.data ? metrics.data.metrics.auc.toFixed(3) : "…"}</span>
+          <span className="flex items-center gap-2 text-xs text-night-muted">
+            <Activity className={cn("h-3.5 w-3.5", lastRun?.status === "succeeded" ? "text-[#7FA2FF]" : "text-amber")} aria-hidden />
+            {lastRun ? `Scored ${fmtRelative(lastRun.finished_at)}` : "No scoring run yet"}
+          </span>
+        </div>
+        <NavLink to="/settings" onClick={onNavigate}
+          className={({ isActive }) => cn("flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm", isActive ? "bg-night-2 text-white" : "text-night-text hover:text-white")}>
+          <Settings className="h-[18px] w-[18px]" strokeWidth={1.7} aria-hidden />
+          Settings
+        </NavLink>
+      </div>
+    </div>
+  );
+}
 
-            <nav className="mt-4 flex flex-1 flex-col gap-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.to === "/"}
-                    className={({ isActive }) =>
-                      cn(
-                        "flex items-center gap-3 rounded-md border px-3 py-3 text-sm font-medium transition",
-                        isActive
-                          ? "border-accent bg-accent-bg text-accent"
-                          : "border-transparent text-secondary hover:border-border hover:bg-surface-alt hover:text-primary",
-                      )
-                    }
-                  >
-                    <Icon className="h-4 w-4" />
-                    <span>{item.label}</span>
-                  </NavLink>
-                );
-              })}
+export function AppShell({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const location = useLocation();
 
-              <div className="mt-auto border-t border-border pt-2">
-                <NavLink
-                  to="/settings"
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 rounded-md border px-3 py-3 text-sm font-medium transition",
-                      isActive
-                        ? "border-accent bg-accent-bg text-accent"
-                        : "border-transparent text-secondary hover:border-border hover:bg-surface-alt hover:text-primary",
-                    )
-                  }
-                >
-                  <Settings className="h-4 w-4" />
-                  <span>Settings</span>
-                </NavLink>
-              </div>
-            </nav>
-          </div>
-        </aside>
+  return (
+    <div className="flex min-h-screen bg-ground text-ink">
+      <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 bg-night lg:block">
+        <SidebarContent />
+      </aside>
 
-        <main className="flex min-w-0 flex-col">
-          <header className="border-b border-border bg-surface px-4 py-4 lg:px-6">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <form onSubmit={submitSearch} className="flex max-w-xl flex-1 items-center gap-3 rounded-md border border-border bg-surface px-3 py-2">
-                <Search className="h-4 w-4 text-muted" />
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search customer ID"
-                  className="w-full border-0 bg-transparent text-sm text-primary outline-none placeholder:text-muted"
-                />
-              </form>
+      {open ? (
+        <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
+          <button type="button" aria-label="Close navigation" className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <aside className="relative h-full w-[260px] bg-night">
+            <button type="button" aria-label="Close navigation" onClick={() => setOpen(false)} className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center text-night-text">
+              <X className="h-5 w-5" aria-hidden />
+            </button>
+            <SidebarContent onNavigate={() => setOpen(false)} />
+          </aside>
+        </div>
+      ) : null}
 
-              <div className="flex items-center gap-3 self-end xl:self-auto">
-                <span className={cn("inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold", modelLive ? "border-success bg-success-bg text-success" : "border-danger bg-danger-bg text-danger") }>
-                  <span className={cn("h-2 w-2 rounded-full", modelLive ? "bg-success" : "bg-danger")} />
-                  {statusText}
-                </span>
-                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-accent-bg text-sm font-semibold text-accent">
-                  {avatar}
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <section className="min-w-0 flex-1 px-4 py-5 lg:px-6 lg:py-6">
-            {children}
-          </section>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-3 border-b border-line bg-surface px-4 py-2 lg:hidden">
+          <button type="button" aria-label="Open navigation" onClick={() => setOpen(true)} className="flex h-11 w-11 items-center justify-center rounded-lg text-ink">
+            <Menu className="h-5 w-5" aria-hidden />
+          </button>
+          <span className="font-display text-lg font-semibold">GridSentinel</span>
+        </div>
+        <main key={location.pathname} className="flex w-full max-w-[1480px] animate-fade-up flex-col gap-6 px-4 py-6 sm:px-8 lg:px-10 lg:py-8">
+          {children}
         </main>
       </div>
     </div>

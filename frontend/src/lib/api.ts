@@ -89,6 +89,7 @@ export interface CorrelationMatrixResponse {
 
 export interface TimeSeriesPoint {
   day_index: number;
+  date?: string | null;
   consumption_kwh: number | null;
   sudden_drop: boolean;
   anomaly_score: number;
@@ -184,6 +185,9 @@ export interface CustomersResponse {
 
 export interface ModelMetricsResponse {
   threshold: number;
+  trained_threshold?: number | null;
+  model_version?: string | null;
+  trained_at?: string | null;
   metrics: Record<string, number>;
   support: Record<string, number>;
   confusion_matrix: Record<string, number>;
@@ -376,4 +380,210 @@ export async function getTrainingJob(jobId: string): Promise<TrainingJobStatusRe
 
 export async function streamTrainingJob(jobId: string): Promise<TrainingJobStatusResponse> {
   return request<TrainingJobStatusResponse>("get", `/train/jobs/${encodeURIComponent(jobId)}/stream`);
+}
+
+
+// ---------------------------------------------------------------------------
+// Operations: scoring pipeline, cases, operating threshold
+// ---------------------------------------------------------------------------
+
+export interface PipelineStage {
+  key: string;
+  name: string;
+  seconds: number;
+  detail: string;
+}
+
+export interface PipelineRun {
+  run_id: string;
+  trigger: "startup" | "manual" | "schedule" | string;
+  started_at: string;
+  finished_at?: string;
+  seconds?: number;
+  status: "running" | "succeeded" | "failed" | string;
+  error?: string;
+  stages: PipelineStage[];
+  summary?: {
+    customers: number;
+    flagged: number;
+    tiers: Record<string, number>;
+    threshold: number;
+    model_version: string;
+  };
+}
+
+export interface TrainingSummary {
+  model_version?: string;
+  trained_at?: string;
+  quick_mode?: boolean;
+  n_trials?: number;
+  cv_metric?: string;
+  cv_best_score?: number;
+  train_customers?: number;
+  test_customers?: number;
+  n_features?: number;
+  auc?: number;
+  pr_auc?: number;
+  precision?: number;
+  recall?: number;
+  f1?: number;
+  threshold?: number;
+  stages: Array<{ name: string; seconds: number }>;
+  best_params: Record<string, number>;
+}
+
+export type CaseStatus = "new" | "reviewing" | "dispatched" | "confirmed" | "cleared";
+
+export interface CaseItem {
+  customer_id: string;
+  rank: number;
+  risk_score: number;
+  risk_tier: "high" | "medium" | "low";
+  status: CaseStatus;
+  note: string;
+  updated_at?: string | null;
+  top_driver?: PredictionReason | null;
+}
+
+export interface CasesResponse {
+  items: CaseItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  status_counts: Record<CaseStatus, number>;
+  threshold: number;
+}
+
+export interface CaseDetail extends CaseItem {
+  flagged: boolean;
+  population: number;
+  history: Array<{ at: string; event: string }>;
+}
+
+export interface OperatingPoint {
+  threshold: number;
+  tp: number;
+  fp: number;
+  fn: number;
+  tn: number;
+  precision: number;
+  recall: number;
+}
+
+export interface ScoreDistribution {
+  edges: number[];
+  honest: number[];
+  theft: number[];
+  threshold: number;
+}
+
+export interface BaselineMetrics {
+  auc: number;
+  pr_auc: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  training_time?: number;
+}
+
+export async function getPipelineRuns(limit = 20): Promise<PipelineRun[]> {
+  return request<PipelineRun[]>("get", "/pipeline/runs", undefined, { limit });
+}
+
+export async function startPipelineRun(): Promise<PipelineRun> {
+  return request<PipelineRun>("post", "/pipeline/runs");
+}
+
+export async function getTrainingSummary(): Promise<TrainingSummary> {
+  return request<TrainingSummary>("get", "/pipeline/training");
+}
+
+export async function getCases(params: {
+  status?: CaseStatus;
+  tier?: "high" | "medium";
+  search?: string;
+  page?: number;
+  page_size?: number;
+} = {}): Promise<CasesResponse> {
+  return request<CasesResponse>("get", "/cases", undefined, params);
+}
+
+export async function getCase(customerId: string): Promise<CaseDetail> {
+  return request<CaseDetail>("get", `/cases/${encodeURIComponent(customerId)}`);
+}
+
+export async function updateCase(customerId: string, payload: { status?: CaseStatus; note?: string }): Promise<CaseDetail> {
+  const response = await api.patch<CaseDetail>(`/cases/${encodeURIComponent(customerId)}`, payload);
+  return response.data;
+}
+
+export async function getOperatingCurve(): Promise<OperatingPoint[]> {
+  return request<OperatingPoint[]>("get", "/model/operating-curve");
+}
+
+export async function getScoreDistribution(): Promise<ScoreDistribution> {
+  return request<ScoreDistribution>("get", "/model/score-distribution");
+}
+
+export async function publishThreshold(threshold: number | null): Promise<ModelMetricsResponse> {
+  const response = await api.put<ModelMetricsResponse>("/model/threshold", { threshold });
+  return response.data;
+}
+
+/** Downloads a report PDF with the API key header (a plain link cannot send it). */
+export async function downloadReport(reportId: string): Promise<void> {
+  const response = await api.get<Blob>(`/reports/${encodeURIComponent(reportId)}/download`, { responseType: "blob" });
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${reportId}.pdf`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Scores a CSV of feature columns and saves the returned predictions CSV. */
+export async function downloadBatchPredictions(file: File): Promise<void> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await api.post<Blob>("/predict/batch", formData, { responseType: "blob" });
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "predictions.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export function apiErrorMessage(error: unknown, fallback = "Request failed"): string {
+  const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response;
+  if (response?.status === 401) return "The API rejected the key. Set it on the Settings page.";
+  const detail = response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  return fallback;
+}
+
+export interface PipelineConfig {
+  run_on_startup: boolean;
+  scoring_interval_minutes: number;
+  training_api_enabled: boolean;
+  environment: string;
+}
+
+export async function getPipelineConfig(): Promise<PipelineConfig> {
+  return request<PipelineConfig>("get", "/pipeline/config");
+}
+
+export interface ReportIndexEntry {
+  report_id: string;
+  dataset_id?: string | null;
+  dataset_label: string;
+  generated_at: string;
+}
+
+export async function getLatestReports(): Promise<ReportIndexEntry[]> {
+  return request<ReportIndexEntry[]>("get", "/reports/latest");
+}
+
+export async function getDatasetCatalog(): Promise<{ items: DatasetCatalogItem[] }> {
+  return request<{ items: DatasetCatalogItem[] }>("get", "/datasets/catalog");
 }
