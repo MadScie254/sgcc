@@ -1,0 +1,35 @@
+# Direct dependencies. Install the pinned set with: pip install -r requirements.lock
+# After editing this file or constraints.txt, regenerate the lock (see constraints.txt).
+
+[project]
+name = "sgcc-theft-detector"
+version = "2.0.0"
+description = "Electricity-theft detection on the SGCC smart-meter dataset: model, API and console"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # ML
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "xgboost>=3.2",
+    "optuna>=3.3",
+    "shap>=0.45",
+    # API
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "fpdf2>=2.7",
+    # Tests
+    "pytest>=8.0",
+    "httpx2>=2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# Resolve the universal lock only for the supported Python range.
+environments = ["python_version >= '3.11' and python_version < '3.14'"]

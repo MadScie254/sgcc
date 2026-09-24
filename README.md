@@ -49,23 +49,56 @@ What drives it:
 The trained model (`models/xgb_best.ubj`) and a demo population of 3,000 held-out
 customers (`data/sgcc_demo.csv.gz`) are committed, so no training or downloads are needed.
 
+Requirements: Python 3.11–3.13, Node.js 20+, Git. Works on Windows, Linux and
+Apple Silicon Macs (Intel Macs lack a `llvmlite` wheel for SHAP).
+
+**1. Get the code**
+
 ```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.lock
-uvicorn backend.main:app --reload  # API on http://127.0.0.1:8000
+git clone https://github.com/MadScie254/sgcc.git
+cd sgcc
 ```
 
-Frontend (second terminal):
+**2. Backend** (first terminal)
+
+Windows (PowerShell):
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1          # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+pip install -r requirements.lock
+uvicorn backend.main:app --reload
+```
+
+macOS / Linux:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.lock
+uvicorn backend.main:app --reload
+```
+
+Wait for `Application startup complete` (the first scoring run takes a few seconds).
+`http://127.0.0.1:8000/api/health` should show `"model_loaded": true`.
+
+**3. Frontend** (second terminal, from the repo folder)
 
 ```bash
 cd frontend
 npm ci
-npm run dev                        # http://localhost:5173, proxies /api to :8000
+npm run dev
 ```
 
-For a single server, run `npm run build` in `frontend/` and open
+Open **http://localhost:5173**. It proxies `/api` to the backend on port 8000.
+Without `ENV`/`API_KEY` set the API runs in development mode and needs no key.
+
+**Single server instead:** run `npm run build` in `frontend/`, restart uvicorn, and open
 `http://127.0.0.1:8000/`; the backend serves `frontend/dist`.
+
+**Production-like run with a key:** set `ENV=production` and `API_KEY=<something>` before
+starting uvicorn (PowerShell: `$env:ENV="production"; $env:API_KEY="..."`), then enter the
+same key on the console's Settings page.
 
 Docker: `docker compose up --build` (set `API_KEY` in `.env` first; see `.env.example`).
 
