@@ -52,6 +52,7 @@ artifacts/**
 !artifacts/metrics.json
 !artifacts/feature_importance.csv
 !artifacts/best_params.json
+!artifacts/ablation.json
 
 # Data: the full dataset is downloaded (scripts/download_data.py); only the
 # held-out demo sample the API serves is committed.

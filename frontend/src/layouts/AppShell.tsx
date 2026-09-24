@@ -74,9 +74,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-ground text-ink">
-      <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 bg-night lg:block">
-        <SidebarContent />
-      </aside>
+      <div className="hidden w-[232px] shrink-0 bg-night lg:block">
+        <aside className="sticky top-0 h-screen">
+          <SidebarContent />
+        </aside>
+      </div>
 
       {open ? (
         <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation">

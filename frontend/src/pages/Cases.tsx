@@ -33,7 +33,7 @@ export function CasesPage() {
   return (
     <>
       <PageHeader
-        eyebrow={cases.data ? `${fmtInt(totalAll)} customers at or above τ ${cases.data.threshold.toFixed(3)}` : "Loading…"}
+        eyebrow={cases.data ? `${fmtInt(totalAll)} customers at or above threshold ${cases.data.threshold.toFixed(3)}` : "Loading…"}
         title="Case files"
         description="Every flagged customer becomes a case with the model's reasons attached. Work them from new to a field outcome."
       />

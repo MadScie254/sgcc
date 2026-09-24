@@ -1,0 +1,22 @@
+{
+  "A. 17 features, dates unsorted": {
+    "roc_auc": 0.7943998480299511,
+    "pr_auc": 0.3643310352608812
+  },
+  "B. 17 features, dates sorted": {
+    "roc_auc": 0.7956635148155631,
+    "pr_auc": 0.3653862969385098
+  },
+  "C. 85 features, dates unsorted": {
+    "roc_auc": 0.8566685441662597,
+    "pr_auc": 0.5231693769492183
+  },
+  "D. 85 features, dates sorted": {
+    "roc_auc": 0.8623153856006238,
+    "pr_auc": 0.532187126913449
+  },
+  "E. 85 features + SMOTE-ENN": {
+    "roc_auc": 0.8381990264481202,
+    "pr_auc": 0.42399147945228877
+  }
+}

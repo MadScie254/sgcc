@@ -33,16 +33,23 @@ Test set: 8,475 customers (723 theft). Cross-validated PR-AUC on the training sp
 
 Full numbers: `artifacts/metrics.json` and `models/baselines/comparison_results.json`.
 
-What drives it:
+What drives it (5-fold CV on all customers, `python scripts/ablation.py`, results in `artifacts/ablation.json`):
 
-- **Chronological order.** The raw SGCC header stores dates lexicographically
-  (`2014/1/1, 2014/1/10, ...`); the loader sorts them before computing trends,
-  drops, and seasonality.
-- **Missing and zero patterns** are kept as signal (XGBoost handles NaN natively),
-  alongside statistics, day-over-day drops, trends, year-over-year ratios,
-  change points, weekday/weekend ratio, and a 34-month relative consumption profile.
-- **No resampling.** SMOTE+ENN lowered cross-validated PR-AUC from ~0.53 to ~0.42.
-  The decision threshold is chosen from out-of-fold predictions (max F1).
+| Variant | ROC-AUC | PR-AUC |
+|---|---|---|
+| 17 original features, dates in file order | 0.794 | 0.364 |
+| 17 original features, dates sorted | 0.796 | 0.365 |
+| 85 features, dates in file order | 0.857 | 0.523 |
+| **85 features, dates sorted (this model)** | **0.862** | **0.532** |
+| 85 features + SMOTE-ENN | 0.838 | 0.424 |
+
+- **Richer features** are the main gain: missing and zero patterns kept as signal
+  (XGBoost handles NaN natively), day-over-day drops, trends, year-over-year ratios,
+  change points and a 34-month relative consumption profile.
+- **No resampling.** SMOTE-ENN costs 0.11 PR-AUC. The decision threshold is chosen
+  from out-of-fold predictions (max F1).
+- **Chronological order** is a correctness fix (the raw header stores dates as
+  `2014/1/1, 2014/1/10, ...`) with a small effect on scores (+0.006 ROC-AUC).
 
 ## Run the app
 
