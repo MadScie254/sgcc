@@ -1,11 +1,12 @@
 """
 SGCC Theft Detector - Evaluation Module
 
-Hold-out metrics for the XGBoost model and for simple baselines.
+Hold-out metrics, the proposal's baseline classifiers, and computational cost.
 """
 
 import json
 import logging
+import pickle
 import time
 from pathlib import Path
 from typing import Dict
@@ -13,7 +14,6 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score, average_precision_score, confusion_matrix, f1_score,
@@ -69,30 +69,30 @@ def feature_importance(model, feature_names) -> pd.DataFrame:
     )
 
 
-def evaluate_baselines(X_train, y_train, X_test, y_test, random_state: int = 42) -> Dict[str, Dict]:
-    """Fit simple reference models on the same split and report hold-out metrics at threshold 0.5."""
-    models = {
-        "logistic_regression": make_pipeline(
-            SimpleImputer(strategy="median"), StandardScaler(),
-            LogisticRegression(class_weight="balanced", max_iter=2000),
-        ),
-        "random_forest": make_pipeline(
-            SimpleImputer(strategy="median"),
-            RandomForestClassifier(
-                n_estimators=400, min_samples_leaf=2, class_weight="balanced_subsample",
-                n_jobs=-1, random_state=random_state,
-            ),
-        ),
-    }
-    results = {}
-    for name, model in models.items():
+def baseline_model(name: str, random_state: int = 42):
+    """The proposal's reference classifiers; both are trained on SMOTE-treated rows."""
+    if name == "random_forest":
+        return RandomForestClassifier(n_estimators=400, min_samples_leaf=2, n_jobs=-1, random_state=random_state)
+    if name == "logistic_regression":
+        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000))
+    raise ValueError(f"Unknown baseline {name!r}")
+
+
+def model_size_mb(model) -> float:
+    """Size of the fitted model as it would be stored."""
+    if hasattr(model, "get_booster"):
+        return len(model.get_booster().save_raw("ubj")) / 1e6
+    return len(pickle.dumps(model)) / 1e6
+
+
+def inference_ms_per_customer(model, X: pd.DataFrame, repeats: int = 3) -> float:
+    """Best-of-``repeats`` wall time of scoring ``X``, per row, in milliseconds."""
+    best = float("inf")
+    for _ in range(repeats):
         start = time.perf_counter()
-        model.fit(X_train, y_train)
-        metrics = classification_metrics(y_test, model.predict_proba(X_test)[:, 1])
-        metrics["training_time"] = round(time.perf_counter() - start, 2)
-        results[name] = metrics
-        logger.info("Baseline %s: AUC %.4f PR-AUC %.4f", name, metrics["auc"], metrics["pr_auc"])
-    return results
+        model.predict_proba(X)
+        best = min(best, time.perf_counter() - start)
+    return best / max(len(X), 1) * 1000
 
 
 def save_json(payload: Dict, output_path: str) -> None:

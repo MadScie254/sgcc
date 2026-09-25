@@ -1,8 +1,9 @@
 # GridSentinel — SGCC Theft Detector
 
 Electricity-theft detection on the SGCC smart-meter dataset (42,372 customers,
-daily kWh from 2014-01-01 to 2016-10-31, ~8.5% labelled theft): an XGBoost model,
-a FastAPI backend, and a React operations console.
+daily kWh from 2014-01-01 to 2016-10-31, ~8.5% labelled theft): the SMOTE+ENN +
+XGBoost framework of the research proposal evaluated against its baselines, the
+winning model served by a FastAPI backend, and a React operations console.
 
 ## The console
 
@@ -10,10 +11,10 @@ a FastAPI backend, and a React operations console.
 |---|---|
 | Command center | Headline figures, the scoring pipeline's last run, the investigation queue, risk distribution and outcome at the threshold in service |
 | Case files | Every flagged customer as a case (new → reviewing → dispatched → confirmed / cleared) with notes and history |
-| Case file | Consumption history (monthly/daily, gaps shaded), SHAP waterfall of why it was flagged, case actions, case-file PDF |
+| Case file | Consumption history (monthly/daily, gaps shaded), SHAP waterfall of why it was flagged, a LIME second opinion that flags disagreement for manual review, case actions, case-file PDF |
 | Pipeline | The automated scoring workflow (ingest → features → score → explain → route) with timings and run history, and the stages of the training run behind the served model |
 | Threshold studio | Trade thefts caught against wasted visits on held-out customers, then publish the threshold to scoring |
-| Model performance | Hold-out metrics, comparison with baselines, what drives the score (mean absolute SHAP), tuned hyperparameters |
+| Model performance | Test metrics; all five pipelines compared (effectiveness, training and inference time, model size, significance); what SMOTE+ENN does to the training data; what drives the score (mean absolute SHAP); tuned hyperparameters |
 | Reports & scoring | Portfolio, dataset and case-file PDF reports; upload SGCC meter data (or feature rows) and see how the model scores it, including thefts caught when the file has labels; batch-score a CSV; score one customer |
 
 ## Model
@@ -137,7 +138,7 @@ or `{"kind": "case", "customer_id": ...}` renders a PDF; `GET /api/reports/{id}/
 downloads it. The console does both in one click. Uploads (`POST /api/datasets`) and
 batch scoring (`POST /api/predict/batch`) accept either the SGCC layout (`CONS_NO`,
 optional `FLAG`, one column per day; features are built exactly as in training) or
-rows of the 85 model features. Anything else is rejected with a reason.
+rows of the 87 model features. Anything else is rejected with a reason.
 
 ### Test the integrated model
 
@@ -148,20 +149,37 @@ python scripts/evaluate_api.py --url http://127.0.0.1:8000 --key "$API_KEY"
 ```
 
 It checks hold-out ROC-AUC and precision through the API, that every endpoint scores
-a customer identically, that SHAP values add up to each prediction, that publishing
-a threshold re-flags customers and opens cases, and that a PDF report downloads.
+a customer identically, that SHAP values add up to each prediction, that LIME gives a
+second opinion, that publishing a threshold re-flags customers and opens cases, and that
+a PDF report downloads.
 
 ## Train
 
 ```bash
-python scripts/download_data.py    # full SGCC dataset -> data/sgcc_full.csv (175 MB, no credentials)
-python -m src.train --quick        # smoke run: 25% of customers, 5 trials
-python -m src.train                # full run: 40 Optuna trials, 5-fold CV
+python scripts/download_data.py        # full SGCC dataset -> data/sgcc_full.csv (175 MB, no credentials)
+python -m src.train --quick            # smoke run: 25% of customers, 5 trials
+python -m src.train                    # full run: 2 × 40 Optuna trials, 5-fold CV (~20 min, 4 cores)
+python -m src.train --device cuda      # the same with XGBoost on an NVIDIA GPU
+python scripts/significance.py         # 10-fold paired tests between the pipelines (~20 min)
+python scripts/ablation.py             # one-change-at-a-time ablation (~25 min)
+python scripts/data_quality.py         # proposal Appendix A tables -> docs/data-quality.md
+python scripts/make_thesis_figures.py  # docs/thesis-figures
 ```
 
-Training writes the model, `artifacts/metrics.json`, `artifacts/feature_importance.csv`,
-`artifacts/best_params.json`, the baseline comparison, and a fresh demo population.
-Settings live in `config.yaml`. Training replaces the served model, so it runs from the
+The protocol follows the research proposal: series cleaning (section 3.7), features
+grouped as statistical, temporal, trend and anomaly (3.8), a stratified 70/15/15
+customer split, SMOTE+ENN on training rows only and redone inside every CV fold (3.9),
+Optuna tuning of both XGBoost pipelines with early stopping on validation (3.10), and
+one scoring of the untouched test customers for every pipeline (3.11). The XGBoost
+pipeline with the higher validation PR-AUC is served. `docs/proposal-alignment.md`
+maps every objective and research question to its evidence.
+
+Training writes the model, its pipeline spec (`artifacts/pipeline.json`: how serving
+must clean and impute), `artifacts/metrics.json`, `tuning.json`, `learning_curves.json`,
+`resampling.json`, `preprocessing_log.json`, `feature_importance.csv`, `best_params.json`,
+the pipeline comparison, and a fresh demo population. Settings live in `config.yaml`
+(`model.device` sets CPU or GPU; the CPU run is the reference, as the proposal targets
+CPU-only utilities). Training replaces the served model, so it runs from the
 command line only; afterwards press **Run scoring now** on the Pipeline page (or restart
 the API) to load the new model.
 

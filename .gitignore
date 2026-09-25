@@ -46,13 +46,21 @@ models/**
 !models/baselines/
 !models/baselines/comparison_results.json
 
-# Generated artifacts (only the files the API reads are committed)
+# Generated artifacts: the files the API reads and the thesis evidence are committed;
+# runtime state (artifacts/state) is not.
 artifacts/**
 !artifacts/.gitkeep
+!artifacts/pipeline.json
 !artifacts/metrics.json
 !artifacts/feature_importance.csv
 !artifacts/best_params.json
+!artifacts/tuning.json
+!artifacts/learning_curves.json
+!artifacts/resampling.json
+!artifacts/preprocessing_log.json
+!artifacts/significance.json
 !artifacts/ablation.json
+!artifacts/data_quality.json
 
 # Data: the full dataset is downloaded (scripts/download_data.py); only the
 # held-out demo sample the API serves is committed.

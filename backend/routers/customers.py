@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Query
+from fastapi.concurrency import run_in_threadpool
 
-from backend.schemas import CustomerList, Explanation, TimeSeries
+from backend.schemas import CustomerList, Explanation, ExplanationCheck, TimeSeries
 from backend.services import model
 from backend.services.data import get_customer_timeseries
 
@@ -29,3 +30,9 @@ def timeseries(customer_id: str):
 @router.get("/{customer_id}/explanation", response_model=Explanation)
 def explanation(customer_id: str):
     return model.explain_customer(customer_id)
+
+
+@router.get("/{customer_id}/explanation-check", response_model=ExplanationCheck)
+async def explanation_check(customer_id: str):
+    """LIME's view of the same prediction; disagreement with SHAP flags the case for review."""
+    return await run_in_threadpool(model.explanation_check, customer_id)

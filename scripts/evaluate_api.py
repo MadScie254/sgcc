@@ -6,8 +6,9 @@ Check the model end to end through a running API.
 
 Verifies that the served model reproduces its hold-out quality, that every
 endpoint scores a customer identically, that SHAP explanations add up to the
-predicted probability, that publishing a threshold re-flags customers, and
-that a PDF report can be generated and downloaded. Exits non-zero if any
+predicted probability, that LIME gives a second opinion, that publishing a
+threshold re-flags customers, and that a PDF report can be generated and
+downloaded. Exits non-zero if any
 check fails.
 """
 
@@ -88,11 +89,15 @@ def main() -> int:
     check("endpoint consistency", worst_gap < 1e-6, f"max score difference across endpoints {worst_gap:.2e} over {len(ranked[:args.sample])} customers")
     check("SHAP additivity", worst_shap < 1e-3, f"max |sigmoid(base + Σ shap) − p| = {worst_shap:.2e}")
 
+    second = api.call("GET", f"/customers/{ranked[0]['customer_id']}/explanation-check")
+    check("LIME second opinion", len(second["lime"]) == second["top_n"], second["message"])
+
     flagged_before = metrics["flagged"]
-    raised = api.call("PUT", "/model/threshold", {"threshold": 0.5})
+    higher = round(min(0.95, trained + 0.25), 2)
+    raised = api.call("PUT", "/model/threshold", {"threshold": higher})
     restored = api.call("PUT", "/model/threshold", {"threshold": None})
     check("threshold publish round trip", raised["flagged"] < flagged_before == restored["flagged"],
-          f"flagged {flagged_before} → {raised['flagged']} at τ 0.5 → {restored['flagged']} after reset")
+          f"flagged {flagged_before} → {raised['flagged']} at τ {higher} → {restored['flagged']} after reset")
 
     # Worked cases stay listed after their customer drops below the threshold, so ≥ rather than ==.
     cases = api.call("GET", "/cases?page_size=1")

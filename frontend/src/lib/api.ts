@@ -93,12 +93,51 @@ export interface ScoreDistribution {
 interface ComparisonRow {
   model: string;
   label: string;
+  served: boolean;
+  preprocessing: "raw" | "clean";
+  treatment: "none" | "smote" | "smote_enn";
   threshold: number;
   auc: number;
   pr_auc: number;
   precision: number;
   recall: number;
   f1: number;
+  gmean: number;
+  mcc: number;
+  training_time: number;
+  inference_ms_per_customer: number;
+  model_size_mb: number;
+  p_value_pr_auc: number | null;
+  p_value_f1: number | null;
+}
+
+interface SeparabilityStats {
+  rows: number;
+  theft_share: number;
+  silhouette: number;
+  fisher_ratio_mean: number;
+  fisher_ratio_max: number;
+  boundary_noise: number;
+  boundary_noise_theft: number;
+}
+
+interface TreatmentEffect {
+  counts: {
+    before: { honest: number; theft: number };
+    after: { honest: number; theft: number };
+    synthetic_created: number;
+    synthetic_removed_by_enn: number | null;
+    honest_removed_by_enn: number | null;
+    theft_removed_by_enn: number | null;
+  };
+  diagnostics: SeparabilityStats;
+}
+
+interface ResamplingEffect {
+  config: Record<string, number>;
+  before: SeparabilityStats;
+  smote: TreatmentEffect;
+  smote_enn: TreatmentEffect;
 }
 
 interface GlobalDrivers {
@@ -107,12 +146,15 @@ interface GlobalDrivers {
 }
 
 interface TrainingSummary {
+  pipeline: string | null;
+  pipeline_label: string | null;
   model_version: string | null;
   trained_at: string | null;
   n_trials: number | null;
   cv_metric: string | null;
   cv_best_score: number | null;
   train_customers: number | null;
+  validation_customers: number | null;
   test_customers: number | null;
   n_features: number | null;
   auc: number | null;
@@ -139,6 +181,16 @@ interface Explanation {
   probability: number;
   base_value: number;
   contributions: Reason[];
+}
+
+interface ExplanationCheck {
+  customer_id: string;
+  top_n: number;
+  shap: Array<{ feature: string; label: string; weight: number }>;
+  lime: Array<{ feature: string; label: string; weight: number }>;
+  shared: string[];
+  agrees: boolean;
+  message: string;
 }
 
 interface Prediction {
@@ -237,6 +289,7 @@ export const getScoreDistribution = () => get<ScoreDistribution>("/model/score-d
 export const getModelComparison = () => get<ComparisonRow[]>("/model/comparison");
 export const getModelDrivers = () => get<GlobalDrivers>("/model/drivers");
 export const getTrainingSummary = () => get<TrainingSummary>("/model/training");
+export const getResamplingEffect = () => get<ResamplingEffect>("/model/resampling");
 
 export async function publishThreshold(threshold: number | null): Promise<ModelMetrics> {
   return (await api.put<ModelMetrics>("/model/threshold", { threshold })).data;
@@ -244,6 +297,8 @@ export async function publishThreshold(threshold: number | null): Promise<ModelM
 
 export const getTimeseries = (customerId: string) => get<TimeSeries>(`/customers/${encodeURIComponent(customerId)}/timeseries`);
 export const getExplanation = (customerId: string) => get<Explanation>(`/customers/${encodeURIComponent(customerId)}/explanation`);
+export const getExplanationCheck = (customerId: string) =>
+  get<ExplanationCheck>(`/customers/${encodeURIComponent(customerId)}/explanation-check`);
 
 export async function predictCustomer(customerId: string): Promise<Prediction> {
   return (await api.post<Prediction>("/predict/single", { customer_id: customerId })).data;

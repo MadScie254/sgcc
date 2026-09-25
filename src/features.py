@@ -5,8 +5,9 @@ Turns each customer's daily consumption series into a fixed-length feature
 vector. ``build_features_wide`` works on the whole customer-by-day matrix at
 once with NumPy.
 
-Missing readings (NaN) are kept as signal: in SGCC, gaps and zero runs are
-among the strongest theft indicators, and XGBoost handles NaN natively.
+Missing readings are theft signal in SGCC. When the series has been cleaned
+(gaps imputed), pass the raw ``missing_mask`` so the missingness features still
+describe the customer's real reporting gaps.
 """
 
 import logging
@@ -83,7 +84,8 @@ def _calendar(columns, start_date: str) -> pd.DatetimeIndex:
     return pd.date_range(start_date, periods=len(columns), freq="D")
 
 
-def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None) -> pd.DataFrame:
+def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None,
+                        missing_mask: Optional[np.ndarray] = None) -> pd.DataFrame:
     """
     Build the feature matrix from a customer-by-day matrix.
 
@@ -92,6 +94,8 @@ def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None) -> pd
             Columns may be a DatetimeIndex; otherwise days are placed on a
             calendar starting at ``config['start_date']``.
         config: Feature parameters; missing keys use DEFAULT_FEATURE_CONFIG.
+        missing_mask: Boolean matrix shaped like ``wide`` marking readings that were
+            missing before cleaning. Defaults to the NaN cells of ``wide``.
 
     Returns:
         DataFrame indexed like ``wide``. Undefined values are NaN.
@@ -100,8 +104,9 @@ def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None) -> pd
     W = wide.to_numpy(dtype=np.float64)
     n, d = W.shape
     dates = _calendar(wide.columns, cfg["start_date"])
-    observed = ~np.isnan(W)
-    n_obs = observed.sum(axis=1)
+    present = ~np.isnan(W)
+    n_obs = present.sum(axis=1)
+    observed = ~missing_mask if missing_mask is not None else present
     f = {}
 
     # Statistics of observed readings
@@ -125,7 +130,7 @@ def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None) -> pd
 
     # Missing and zero patterns
     zero = W == 0
-    f["missing_ratio"] = 1.0 - n_obs / d
+    f["missing_ratio"] = 1.0 - observed.sum(axis=1) / d
     thirds = np.array_split(np.arange(d), 3)
     for name, cols in zip(("first", "middle", "last"), thirds):
         f[f"missing_ratio_{name}_third"] = 1.0 - observed[:, cols].mean(axis=1)
@@ -133,8 +138,9 @@ def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None) -> pd
     f["zero_ratio"] = _safe_div(f["zero_day_count"], n_obs)
     f["longest_zero_run"], _ = _run_lengths(zero, cfg["missing_sequence_threshold"])
     f["longest_missing_run"], f["missing_sequences_count"] = _run_lengths(~observed, cfg["missing_sequence_threshold"])
-    first_obs = np.where(n_obs > 0, observed.argmax(axis=1), d)
-    last_obs = np.where(n_obs > 0, d - 1 - observed[:, ::-1].argmax(axis=1), 0)
+    any_obs = observed.any(axis=1)
+    first_obs = np.where(any_obs, observed.argmax(axis=1), d)
+    last_obs = np.where(any_obs, d - 1 - observed[:, ::-1].argmax(axis=1), 0)
     f["first_obs_frac"] = first_obs / d
     f["last_obs_frac"] = last_obs / d
 
@@ -152,6 +158,12 @@ def build_features_wide(wide: pd.DataFrame, config: Optional[dict] = None) -> pd
     f["slope_full"] = _slopes(W)
     f["slope_last_30d"] = _slopes(W[:, -30:])
     f["slope_last_90d"] = _slopes(W[:, -90:])
+    f["slope_last_180d"] = _slopes(W[:, -180:])
+    # Sign changes between the trends of consecutive 30-day windows (proposal Appendix A.2)
+    window_slopes = np.sign(np.column_stack([_slopes(W[:, i:i + 30]) for i in range(0, d - 29, 30)]))
+    signed = np.where(np.isnan(window_slopes) | (window_slopes == 0), np.nan, window_slopes)
+    signed = pd.DataFrame(signed).ffill(axis=1).to_numpy()  # skip windows without a trend
+    f["trend_direction_changes"] = ((signed[:, 1:] != signed[:, :-1]) & ~np.isnan(signed[:, :-1])).sum(axis=1).astype(float)
     f["slope_full_rel"] = _safe_div(f["slope_full"] * d, mean)
     for k in (30, 90, 180):
         f[f"last{k}_vs_mean"] = _safe_div(_nanmean(W[:, -k:]), mean, fill=np.nan)

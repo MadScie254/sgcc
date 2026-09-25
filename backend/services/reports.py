@@ -20,7 +20,7 @@ from .config import get_paths
 from .data import get_customer_timeseries
 from .datasets import get_dataset, load_dataset, summarize
 from .errors import NotFoundError
-from .model import explain_customer, get_decision_threshold, get_model_metrics
+from .model import explain_customer, explanation_check, get_decision_threshold, get_model_metrics, model_comparison
 from .operations import get_case, list_cases
 from .storage import read_json, write_json
 
@@ -188,6 +188,10 @@ class _Report(FPDF):
 # Report content
 # ---------------------------------------------------------------------------
 
+RESPONSIBLE_USE = ("A flag is a reason to inspect, not evidence of theft. Conclusions rest on the field "
+                   "investigation; a customer found honest is cleared and can appeal (proposal section 3.13).")
+
+
 def _footer(metrics: Dict[str, Any]) -> str:
     return f"Model xgb v{metrics['model_version']}  ·  threshold in service {metrics['threshold']:.3f}"
 
@@ -218,6 +222,15 @@ def _portfolio(generated: str) -> tuple:
         ("F1", _num(m["f1"])), ("MCC", _num(m["mcc"])),
     ])
 
+    comparison = model_comparison()
+    if comparison:
+        pdf.heading("Pipelines compared on the test customers")
+        pdf.grid(["Pipeline", "PR-AUC", "Recall", "Precision", "F1", "MCC", "ms/customer"],
+                 [[("* " if r["served"] else "") + r["label"], _num(r["pr_auc"]), _num(r["recall"]), _num(r["precision"]),
+                   _num(r["f1"]), _num(r["mcc"]), f"{r['inference_ms_per_customer']:.3f}"] for r in comparison],
+                 widths=[64, 18, 18, 20, 16, 16, 26], align=["LEFT"] + ["RIGHT"] * 6)
+        pdf.paragraph("* the pipeline in service. Each pipeline is scored at its own threshold, chosen on validation customers.")
+
     pdf.heading("Outcome on served customers at the operating threshold")
     pdf.grid(["", "Actually theft", "Actually honest"],
              [["Flagged", f"{cm['tp']:,} caught", f"{cm['fp']:,} wasted visits"],
@@ -234,6 +247,7 @@ def _portfolio(generated: str) -> tuple:
                f"{c['top_driver']['label']} ({c['top_driver']['display_value']})" if c["top_driver"] else "-"]
               for c in cases["items"]],
              widths=[12, 34, 20, 16, 22, 74], align=["RIGHT", "LEFT", "RIGHT", "LEFT", "LEFT", "LEFT"])
+    pdf.paragraph(RESPONSIBLE_USE)
     return pdf, f"{metrics['customers_monitored']:,} customers at threshold {metrics['threshold']:.3f}"
 
 
@@ -329,9 +343,15 @@ def _case(generated: str, customer_id: str) -> tuple:
              [[c["label"], c["display_value"], f"{c['shap_value']:+.3f}"] for c in explanation["contributions"][:10]],
              widths=[82, 62, 34], align=["LEFT", "LEFT", "RIGHT"])
 
+    check = explanation_check(customer_id)
+    pdf.heading("Second opinion (LIME)")
+    pdf.paragraph(f"{check['message']} LIME's strongest signals: "
+                  + ", ".join(f"{a['label']} ({a['weight']:+.3f})" for a in check["lime"]) + ".")
+
     pdf.heading("Case history")
     history = case["history"] or [{"at": "", "event": "No case activity yet."}]
     pdf.grid(["When (UTC)", "Event"], [[h["at"].replace("T", " ")[:16], h["event"]] for h in history], widths=[40, 138])
+    pdf.paragraph(RESPONSIBLE_USE)
     return pdf, customer_id
 
 

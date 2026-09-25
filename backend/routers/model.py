@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from backend.schemas import ComparisonRow, GlobalDrivers, ModelMetrics, OperatingPoint, ScoreDistribution, ThresholdUpdate, TrainingSummary
+from backend.schemas import (
+    ComparisonRow, GlobalDrivers, ModelMetrics, OperatingPoint, ResamplingEffect, ScoreDistribution, ThresholdUpdate,
+    TrainingSummary,
+)
 from backend.services import model
 from backend.services.operations import PipelineBusyError, run_scoring_pipeline
 
@@ -30,6 +33,14 @@ def score_distribution():
 @router.get("/comparison", response_model=List[ComparisonRow])
 def comparison():
     return model.model_comparison()
+
+
+@router.get("/resampling", response_model=ResamplingEffect)
+def resampling():
+    effect = model.resampling_effect()
+    if not effect:
+        raise HTTPException(status_code=404, detail="No resampling record: run python -m src.train")
+    return effect
 
 
 @router.get("/drivers", response_model=GlobalDrivers)

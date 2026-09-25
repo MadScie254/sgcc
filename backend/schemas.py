@@ -76,12 +76,58 @@ class ScoreDistribution(BaseModel):
 class ComparisonRow(BaseModel):
     model: str
     label: str
+    served: bool
+    preprocessing: Literal["raw", "clean"]
+    treatment: Literal["none", "smote", "smote_enn"]
     threshold: float
     auc: float
     pr_auc: float
     precision: float
     recall: float
     f1: float
+    gmean: float
+    mcc: float
+    training_time: float
+    inference_ms_per_customer: float
+    model_size_mb: float
+    p_value_pr_auc: Optional[float] = None
+    p_value_f1: Optional[float] = None
+
+
+class ClassCounts(BaseModel):
+    honest: int
+    theft: int
+
+
+class SeparabilityStats(BaseModel):
+    rows: int
+    theft_share: float
+    silhouette: float
+    fisher_ratio_mean: float
+    fisher_ratio_max: float
+    boundary_noise: float
+    boundary_noise_theft: float
+
+
+class TreatmentCounts(BaseModel):
+    before: ClassCounts
+    after: ClassCounts
+    synthetic_created: int
+    synthetic_removed_by_enn: Optional[int] = None
+    honest_removed_by_enn: Optional[int] = None
+    theft_removed_by_enn: Optional[int] = None
+
+
+class TreatmentEffect(BaseModel):
+    counts: TreatmentCounts
+    diagnostics: SeparabilityStats
+
+
+class ResamplingEffect(BaseModel):
+    config: Dict[str, float]
+    before: SeparabilityStats
+    smote: TreatmentEffect
+    smote_enn: TreatmentEffect
 
 
 class Driver(BaseModel):
@@ -102,6 +148,8 @@ class TrainingStage(BaseModel):
 
 
 class TrainingSummary(BaseModel):
+    pipeline: Optional[str] = None
+    pipeline_label: Optional[str] = None
     model_version: Optional[str] = None
     trained_at: Optional[str] = None
     quick_mode: Optional[bool] = None
@@ -109,6 +157,7 @@ class TrainingSummary(BaseModel):
     cv_metric: Optional[str] = None
     cv_best_score: Optional[float] = None
     train_customers: Optional[int] = None
+    validation_customers: Optional[int] = None
     test_customers: Optional[int] = None
     n_features: Optional[int] = None
     auc: Optional[float] = None
@@ -154,6 +203,22 @@ class Explanation(BaseModel):
     probability: float
     base_value: float
     contributions: List[Reason]
+
+
+class Attribution(BaseModel):
+    feature: str
+    label: str
+    weight: float
+
+
+class ExplanationCheck(BaseModel):
+    customer_id: str
+    top_n: int
+    shap: List[Attribution]
+    lime: List[Attribution]
+    shared: List[str]
+    agrees: bool
+    message: str
 
 
 class PredictionRequest(BaseModel):

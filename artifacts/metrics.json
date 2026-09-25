@@ -1,61 +1,99 @@
 {
-  "threshold": 0.22820228338241577,
-  "recall": 0.4315352697095436,
-  "precision": 0.5531914893617021,
-  "f1": 0.48484848484848486,
-  "accuracy": 0.9217699115044248,
-  "auc": 0.8466405671244257,
-  "pr_auc": 0.5055533525752385,
-  "gmean": 0.6461478417419007,
-  "mcc": 0.4472225010739321,
-  "specificity": 0.9674922600619195,
+  "threshold": 0.4992256164550781,
+  "recall": 0.4261992619926199,
+  "precision": 0.532258064516129,
+  "f1": 0.4733606557377049,
+  "accuracy": 0.9191315292636879,
+  "auc": 0.850962398942875,
+  "pr_auc": 0.5059735109384662,
+  "gmean": 0.6413409449031932,
+  "mcc": 0.4332610731847396,
+  "specificity": 0.9650842793257653,
   "confusion_matrix": {
-    "tn": 7500,
-    "fp": 252,
-    "fn": 411,
-    "tp": 312
+    "tn": 5611,
+    "fp": 203,
+    "fn": 311,
+    "tp": 231
   },
   "support": {
-    "class_0": 7752,
-    "class_1": 723
+    "class_0": 5814,
+    "class_1": 542
   },
-  "model_version": "2.0.0",
-  "trained_at": "2026-09-23T22:25:30+00:00",
+  "at_threshold_0_5": {
+    "threshold": 0.5,
+    "recall": 0.4261992619926199,
+    "precision": 0.532258064516129,
+    "f1": 0.4733606557377049,
+    "accuracy": 0.9191315292636879,
+    "auc": 0.850962398942875,
+    "pr_auc": 0.5059735109384662,
+    "gmean": 0.6413409449031932,
+    "mcc": 0.4332610731847396,
+    "specificity": 0.9650842793257653,
+    "confusion_matrix": {
+      "tn": 5611,
+      "fp": 203,
+      "fn": 311,
+      "tp": 231
+    },
+    "support": {
+      "class_0": 5814,
+      "class_1": 542
+    }
+  },
+  "validation_pr_auc": 0.48739302186339245,
+  "training_time": 6.49,
+  "inference_ms_per_customer": 0.0020912024858455044,
+  "model_size_mb": 0.925646,
+  "served": true,
+  "pipeline": "xgboost",
+  "pipeline_label": "XGBoost, no resampling",
+  "model_version": "3.0.0",
+  "trained_at": "2026-09-25T20:55:24+00:00",
   "quick_mode": false,
-  "cv_best_score": 0.5233294816276826,
+  "cv_best_score": 0.49610143779276644,
   "cv_metric": "average_precision",
   "n_trials": 40,
-  "train_customers": 33897,
-  "test_customers": 8475,
-  "n_features": 85,
+  "train_customers": 29660,
+  "validation_customers": 6356,
+  "test_customers": 6356,
+  "n_features": 87,
   "stages": [
     {
       "name": "Load",
-      "seconds": 17.66
+      "seconds": 17.84
+    },
+    {
+      "name": "Clean",
+      "seconds": 7.88
     },
     {
       "name": "Features",
-      "seconds": 34.17
+      "seconds": 63.07
+    },
+    {
+      "name": "Split",
+      "seconds": 0.04
+    },
+    {
+      "name": "Resample",
+      "seconds": 4.65
     },
     {
       "name": "Tune",
-      "seconds": 1604.02
+      "seconds": 1012.43
     },
     {
-      "name": "Threshold",
-      "seconds": 36.2
+      "name": "Validate",
+      "seconds": 49.47
     },
     {
       "name": "Evaluate",
-      "seconds": 8.28
-    },
-    {
-      "name": "Baselines",
-      "seconds": 25.32
+      "seconds": 1.36
     },
     {
       "name": "Publish",
-      "seconds": 4.12
+      "seconds": 4.37
     }
   ]
 }

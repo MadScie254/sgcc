@@ -9,6 +9,19 @@ data:
   # Held-out customers the API serves. Written by training, committed to the repo.
   serving_data_path: "data/sgcc_demo.csv.gz"
 
+# Series cleaning (proposal section 3.7), used by pipelines on cleaned readings.
+preprocessing:
+  short_gap_days: 3               # gaps up to this long are linearly interpolated
+  cap_kwh: 10000                  # readings above this are capped
+  outlier_sigma: 3                # readings beyond mean +- this many SDs -> customer median
+  zero_run_days: 30               # zero runs longer than this are counted for review
+
+# Class-imbalance treatment (proposal section 3.9), applied to training rows only.
+resampling:
+  sampling_strategy: 0.5          # theft : honest after SMOTE
+  smote_k_neighbors: 5
+  enn_n_neighbors: 3
+
 features:
   sudden_drop_threshold: 0.5      # day-over-day drop counted as "sudden" (50%)
   peak_day_percentile: 0.9        # readings at or above this quantile are peak days
@@ -19,16 +32,20 @@ features:
 
 model:
   type: "xgboost"
-  version: "2.0.0"
+  version: "3.0.0"
+  # "cpu" (the reference: the proposal targets CPU-only utilities) or "cuda" for an NVIDIA GPU.
+  # Only XGBoost uses the GPU; cleaning, features, SMOTE+ENN and the baselines stay on the CPU.
+  device: "cpu"
 
   optuna:
     n_trials: 40
     cv_folds: 5
     timeout: null                 # seconds; null for no limit
     metric: "average_precision"   # or "roc_auc"
+    # Ranges follow proposal Table 2.3 and section 3.10; early stopping trims n_estimators.
     search_space:
-      n_estimators: {low: 200, high: 1200, step: 100}
-      learning_rate: {low: 0.01, high: 0.1, log: true}
+      n_estimators: {low: 100, high: 500, step: 50}
+      learning_rate: {low: 0.01, high: 0.3, log: true}
       max_depth: {low: 3, high: 9}
       min_child_weight: {low: 1, high: 20, log: true}
       subsample: {low: 0.6, high: 1.0}
@@ -36,7 +53,11 @@ model:
       gamma: {low: 0.0, high: 5.0}
       reg_alpha: {low: 0.001, high: 10.0, log: true}
       reg_lambda: {low: 0.01, high: 20.0, log: true}
-      scale_pos_weight: {low: 1.0, high: 5.0}
+    # scale_pos_weight range by treatment: untreated data starts at the class ratio (~10.7);
+    # after SMOTE+ENN (theft:honest ~1:2) a small extra weight is enough.
+    scale_pos_weight:
+      none: {low: 1.0, high: 10.72}
+      smote_enn: {low: 1.0, high: 3.0}
 
   quick_train:
     sample_fraction: 0.25
@@ -44,7 +65,9 @@ model:
     cv_folds: 3
 
 evaluation:
-  test_size: 0.2
+  validation_size: 0.15           # early stopping, thresholds, choosing the served pipeline
+  test_size: 0.15                 # scored once, at the end
+  early_stopping_rounds: 50
   threshold_strategy: "f1"        # "f1" or "precision" (max recall at min_precision)
   min_precision: 0.5
 

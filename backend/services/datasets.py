@@ -25,9 +25,9 @@ from fastapi import UploadFile
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from src.data_loader import ID_COLUMNS, LABEL_COLUMNS, frame_to_wide, is_consumption_frame
-from src.features import build_features_wide
 
-from .config import get_config, get_paths
+from .config import get_paths
+from .data import build_model_input
 from .errors import NotFoundError
 from .model import get_decision_threshold, get_feature_names, predict_proba, risk_tier
 from .storage import read_json, write_json
@@ -98,7 +98,7 @@ def score_frame(frame: pd.DataFrame) -> ScoredDataset:
             wide, labels = frame_to_wide(frame, require_labels=False)
         except ValueError as exc:
             raise DatasetError(str(exc)) from exc
-        features = build_features_wide(wide, get_config().get("features"))
+        features = build_model_input(wide)
         return ScoredDataset(
             format="consumption", customer_ids=list(features.index.astype(str)),
             probabilities=predict_proba(features),

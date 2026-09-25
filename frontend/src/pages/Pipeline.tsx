@@ -15,13 +15,15 @@ const SCORING_STAGES: Array<{ key: string; name: string; about: string; input: s
 ];
 
 const TRAINING_ABOUT: Record<string, string> = {
-  Load: "Reads the full SGCC dataset (42,372 customers) and drops duplicated customers.",
-  Features: "The same 85 features as scoring, then a stratified 80/20 split by customer.",
-  Tune: "Optuna searches ten XGBoost hyperparameters, each trial scored by cross-validated PR-AUC on training customers only.",
-  Threshold: "Out-of-fold predictions choose the threshold that maximises F1, never touching the test customers.",
-  Evaluate: "Fits the final model and measures it once on the held-out customers.",
-  Baselines: "Logistic regression and random forest on the same split, as reference points.",
-  Publish: "Writes the model, metrics and the held-out sample the dashboard serves.",
+  Load: "Reads the full SGCC dataset: 42,372 customers, 1,034 days, 8.5% labelled theft.",
+  Clean: "Proposal section 3.7: caps readings above 10,000 kWh, replaces 3-SD outliers with the customer's median, interpolates gaps up to 3 days and fills longer ones. Missingness is kept as signal.",
+  Features: "The same features as scoring, on raw and on cleaned readings, grouped as statistical, temporal, trend and anomaly.",
+  Split: "Customers split 70 / 15 / 15 into training, validation and test, stratified by label.",
+  Resample: "Objective 1: measures class counts, separability and boundary noise before and after SMOTE and SMOTE+ENN on the training customers.",
+  Tune: "Optuna searches the XGBoost hyperparameters of both XGBoost pipelines on 5-fold cross-validated PR-AUC; SMOTE+ENN is redone inside every fold.",
+  Validate: "Fits all five pipelines (tuned XGBoost with early stopping), picks each one's F1-maximising threshold on validation, and serves the XGBoost pipeline with the higher validation PR-AUC.",
+  Evaluate: "Scores every pipeline once on the untouched test customers: effectiveness, training time, inference time and model size.",
+  Publish: "Writes the model, its pipeline spec, all results and the held-out sample the dashboard serves.",
 };
 
 type StageState = "done" | "running" | "failed" | "idle";
@@ -146,7 +148,8 @@ export function PipelinePage() {
                 {training.data ? (
                   <>
                     <div>model v{training.data.model_version ?? "—"} · {training.data.n_trials ?? "—"} trials · CV {training.data.cv_metric ?? "—"} {fmtNum(training.data.cv_best_score)}</div>
-                    <div>train {fmtInt(training.data.train_customers)} · test {fmtInt(training.data.test_customers)} customers · {training.data.n_features ?? "—"} features</div>
+                    <div>serving: {training.data.pipeline_label ?? "—"}</div>
+                    <div>train {fmtInt(training.data.train_customers)} · validation {fmtInt(training.data.validation_customers)} · test {fmtInt(training.data.test_customers)} customers · {training.data.n_features ?? "—"} features</div>
                     <div>test ROC-AUC {fmtNum(training.data.auc)} · PR-AUC {fmtNum(training.data.pr_auc)} · F1 {fmtNum(training.data.f1)} @ τ {fmtNum(training.data.threshold)}</div>
                     <div className="mt-2 text-night-muted">best params: {Object.entries(training.data.best_params).map(([k, v]) => `${k}=${+v.toPrecision(3)}`).join(", ") || "—"}</div>
                   </>

@@ -1,0 +1,68 @@
+{
+  "integrity": {
+    "file": "sgcc_full.csv",
+    "file_size_mb": 175.2,
+    "layout": "wide: one row per customer, CONS_NO + FLAG + 1,034 date columns",
+    "rows_in_file": 42372,
+    "duplicate_customer_rows": 0,
+    "customers": 42372,
+    "days": 1034,
+    "calendar_days_in_range": 1035,
+    "absent_dates": [
+      "2016-09-18"
+    ],
+    "first_date": "2014-01-01",
+    "last_date": "2016-10-31",
+    "cells": 43812648
+  },
+  "completeness": {
+    "missing_cells": 11233528,
+    "missing_percent": 25.64,
+    "customers_complete": 0,
+    "customers_without_readings": 5,
+    "customers_over_10pct_missing": 21375,
+    "theft_customers_over_10pct_missing": 2240,
+    "missing_percent_honest": 25.1,
+    "missing_percent_theft": 31.47,
+    "labels_missing": 0
+  },
+  "quality": {
+    "negative_readings": 0,
+    "readings_above_10000_kwh": 260,
+    "readings_above_15000_kwh": 162,
+    "max_reading_kwh": 800003.3125,
+    "median_reading_kwh": 4.590000152587891
+  },
+  "class_distribution": {
+    "honest": 38757,
+    "theft": 3615,
+    "theft_percent": 8.53,
+    "imbalance_ratio": 10.72,
+    "expected": {
+      "customers": 42372,
+      "theft": 3615,
+      "honest": 38757,
+      "start": "2014-01-01",
+      "end": "2016-10-31"
+    }
+  },
+  "outliers": {
+    "negative": 0,
+    "above_10000_kwh": 260,
+    "customers_with_zero_runs_over_30_days": 11652,
+    "cells_beyond_3_sd": 413570
+  },
+  "preprocessing_log": {
+    "customers": 42372,
+    "days": 1034,
+    "cells": 43812648,
+    "missing_cells": 11233528,
+    "negative_replaced": 0,
+    "capped_above_limit": 260,
+    "outliers_replaced": 413571,
+    "short_gap_cells_interpolated": 290195,
+    "long_gap_cells_filled": 10938163,
+    "customers_without_readings": 5,
+    "customers_with_long_zero_runs": 12807
+  }
+}

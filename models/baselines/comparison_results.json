@@ -1,48 +1,272 @@
 {
-  "logistic_regression": {
-    "threshold": 0.5,
-    "recall": 0.6514522821576764,
-    "precision": 0.17483296213808464,
-    "f1": 0.27568042142230026,
-    "accuracy": 0.7079646017699115,
-    "auc": 0.7551808340719995,
-    "pr_auc": 0.27172336585707046,
-    "gmean": 0.6816441594177586,
-    "mcc": 0.21877450951789634,
-    "specificity": 0.7132352941176471,
+  "proposed": {
+    "label": "SMOTE+ENN + XGBoost (proposed)",
+    "preprocessing": "clean",
+    "treatment": "smote_enn",
+    "learner": "xgboost",
+    "tuned": true,
+    "threshold": 0.4713280498981476,
+    "recall": 0.4944649446494465,
+    "precision": 0.3889695210449927,
+    "f1": 0.4354183590576767,
+    "accuracy": 0.8906544996853367,
+    "auc": 0.8283196686456029,
+    "pr_auc": 0.4616492558180186,
+    "gmean": 0.6772444429574626,
+    "mcc": 0.37915646930846614,
+    "specificity": 0.9275885792913656,
     "confusion_matrix": {
-      "tn": 5529,
-      "fp": 2223,
-      "fn": 252,
-      "tp": 471
+      "tn": 5393,
+      "fp": 421,
+      "fn": 274,
+      "tp": 268
     },
     "support": {
-      "class_0": 7752,
-      "class_1": 723
+      "class_0": 5814,
+      "class_1": 542
     },
-    "training_time": 5.16
+    "at_threshold_0_5": {
+      "threshold": 0.5,
+      "recall": 0.477859778597786,
+      "precision": 0.4150641025641026,
+      "f1": 0.444253859348199,
+      "accuracy": 0.8980490874764002,
+      "auc": 0.8283196686456029,
+      "pr_auc": 0.4616492558180186,
+      "gmean": 0.669223416876451,
+      "mcc": 0.38960441815388375,
+      "specificity": 0.9372205022359821,
+      "confusion_matrix": {
+        "tn": 5449,
+        "fp": 365,
+        "fn": 283,
+        "tp": 259
+      },
+      "support": {
+        "class_0": 5814,
+        "class_1": 542
+      }
+    },
+    "validation_pr_auc": 0.44426395000435154,
+    "training_time": 8.25,
+    "inference_ms_per_customer": 0.0016112882316135912,
+    "model_size_mb": 0.95126,
+    "served": false
   },
-  "random_forest": {
-    "threshold": 0.5,
-    "recall": 0.11479944674965421,
-    "precision": 0.7830188679245284,
-    "f1": 0.20024125452352232,
-    "accuracy": 0.9217699115044248,
-    "auc": 0.8155642161501713,
-    "pr_auc": 0.417042674804431,
-    "gmean": 0.3383176606622921,
-    "mcc": 0.2810957200358569,
-    "specificity": 0.9970330237358102,
+  "xgboost": {
+    "label": "XGBoost, no resampling",
+    "preprocessing": "raw",
+    "treatment": "none",
+    "learner": "xgboost",
+    "tuned": true,
+    "threshold": 0.4992256164550781,
+    "recall": 0.4261992619926199,
+    "precision": 0.532258064516129,
+    "f1": 0.4733606557377049,
+    "accuracy": 0.9191315292636879,
+    "auc": 0.850962398942875,
+    "pr_auc": 0.5059735109384662,
+    "gmean": 0.6413409449031932,
+    "mcc": 0.4332610731847396,
+    "specificity": 0.9650842793257653,
     "confusion_matrix": {
-      "tn": 7729,
-      "fp": 23,
-      "fn": 640,
-      "tp": 83
+      "tn": 5611,
+      "fp": 203,
+      "fn": 311,
+      "tp": 231
     },
     "support": {
-      "class_0": 7752,
-      "class_1": 723
+      "class_0": 5814,
+      "class_1": 542
     },
-    "training_time": 20.14
+    "at_threshold_0_5": {
+      "threshold": 0.5,
+      "recall": 0.4261992619926199,
+      "precision": 0.532258064516129,
+      "f1": 0.4733606557377049,
+      "accuracy": 0.9191315292636879,
+      "auc": 0.850962398942875,
+      "pr_auc": 0.5059735109384662,
+      "gmean": 0.6413409449031932,
+      "mcc": 0.4332610731847396,
+      "specificity": 0.9650842793257653,
+      "confusion_matrix": {
+        "tn": 5611,
+        "fp": 203,
+        "fn": 311,
+        "tp": 231
+      },
+      "support": {
+        "class_0": 5814,
+        "class_1": 542
+      }
+    },
+    "validation_pr_auc": 0.48739302186339245,
+    "training_time": 6.49,
+    "inference_ms_per_customer": 0.0020912024858455044,
+    "model_size_mb": 0.925646,
+    "served": true
+  },
+  "xgboost_default": {
+    "label": "XGBoost, default settings",
+    "preprocessing": "raw",
+    "treatment": "none",
+    "learner": "xgboost",
+    "tuned": false,
+    "threshold": 0.16916784644126892,
+    "recall": 0.4833948339483395,
+    "precision": 0.4388609715242881,
+    "f1": 0.46005267778753295,
+    "accuracy": 0.9032410320956576,
+    "auc": 0.8390940178751632,
+    "pr_auc": 0.48762126824707047,
+    "gmean": 0.674938401959865,
+    "mcc": 0.40762133835165926,
+    "specificity": 0.9423804609563123,
+    "confusion_matrix": {
+      "tn": 5479,
+      "fp": 335,
+      "fn": 280,
+      "tp": 262
+    },
+    "support": {
+      "class_0": 5814,
+      "class_1": 542
+    },
+    "at_threshold_0_5": {
+      "threshold": 0.5,
+      "recall": 0.2767527675276753,
+      "precision": 0.7211538461538461,
+      "f1": 0.4,
+      "accuracy": 0.9292007551919447,
+      "auc": 0.8390940178751632,
+      "pr_auc": 0.48762126824707047,
+      "gmean": 0.5234423597739558,
+      "mcc": 0.41878073617695954,
+      "specificity": 0.9900240798073615,
+      "confusion_matrix": {
+        "tn": 5756,
+        "fp": 58,
+        "fn": 392,
+        "tp": 150
+      },
+      "support": {
+        "class_0": 5814,
+        "class_1": 542
+      }
+    },
+    "validation_pr_auc": 0.4582714068092772,
+    "training_time": 1.28,
+    "inference_ms_per_customer": 0.0011781924166272865,
+    "model_size_mb": 0.371744,
+    "served": false
+  },
+  "random_forest_smote": {
+    "label": "Random forest + SMOTE",
+    "preprocessing": "clean",
+    "treatment": "smote",
+    "learner": "random_forest",
+    "tuned": false,
+    "threshold": 0.38495833333333346,
+    "recall": 0.4317343173431734,
+    "precision": 0.365625,
+    "f1": 0.39593908629441626,
+    "accuracy": 0.8876651982378855,
+    "auc": 0.8121410084069881,
+    "pr_auc": 0.4114061206328606,
+    "gmean": 0.6337078882919971,
+    "mcc": 0.3358869217964428,
+    "specificity": 0.9301685586515308,
+    "confusion_matrix": {
+      "tn": 5408,
+      "fp": 406,
+      "fn": 308,
+      "tp": 234
+    },
+    "support": {
+      "class_0": 5814,
+      "class_1": 542
+    },
+    "at_threshold_0_5": {
+      "threshold": 0.5,
+      "recall": 0.3025830258302583,
+      "precision": 0.5484949832775919,
+      "f1": 0.39001189060642094,
+      "accuracy": 0.9192888609188169,
+      "auc": 0.8121410084069881,
+      "pr_auc": 0.4114061206328606,
+      "gmean": 0.5436516386233494,
+      "mcc": 0.3685038170482322,
+      "specificity": 0.9767801857585139,
+      "confusion_matrix": {
+        "tn": 5679,
+        "fp": 135,
+        "fn": 378,
+        "tp": 164
+      },
+      "support": {
+        "class_0": 5814,
+        "class_1": 542
+      }
+    },
+    "validation_pr_auc": 0.3945409780276727,
+    "training_time": 29.33,
+    "inference_ms_per_customer": 0.028820187067351847,
+    "model_size_mb": 176.703055,
+    "served": false
+  },
+  "logistic_regression_smote": {
+    "label": "Logistic regression + SMOTE",
+    "preprocessing": "clean",
+    "treatment": "smote",
+    "learner": "logistic_regression",
+    "tuned": false,
+    "threshold": 0.5125227109167979,
+    "recall": 0.37084870848708484,
+    "precision": 0.3180379746835443,
+    "f1": 0.3424190800681431,
+    "accuracy": 0.8785399622404028,
+    "auc": 0.7537985673974387,
+    "pr_auc": 0.3138597977058659,
+    "gmean": 0.5859668693380304,
+    "mcc": 0.27693106508429893,
+    "specificity": 0.9258685930512556,
+    "confusion_matrix": {
+      "tn": 5383,
+      "fp": 431,
+      "fn": 341,
+      "tp": 201
+    },
+    "support": {
+      "class_0": 5814,
+      "class_1": 542
+    },
+    "at_threshold_0_5": {
+      "threshold": 0.5,
+      "recall": 0.3874538745387454,
+      "precision": 0.3056768558951965,
+      "f1": 0.3417412530512612,
+      "accuracy": 0.8727186910006294,
+      "auc": 0.7537985673974387,
+      "pr_auc": 0.3138597977058659,
+      "gmean": 0.5963772825654743,
+      "mcc": 0.27471955092040407,
+      "specificity": 0.9179566563467493,
+      "confusion_matrix": {
+        "tn": 5337,
+        "fp": 477,
+        "fn": 332,
+        "tp": 210
+      },
+      "support": {
+        "class_0": 5814,
+        "class_1": 542
+      }
+    },
+    "validation_pr_auc": 0.3138519706795591,
+    "training_time": 3.68,
+    "inference_ms_per_customer": 0.000581860604143003,
+    "model_size_mb": 0.005357,
+    "served": false
   }
 }

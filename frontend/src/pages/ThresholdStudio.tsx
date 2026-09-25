@@ -35,7 +35,7 @@ export function ThresholdStudioPage() {
   const inService = metrics.data.threshold;
   const trained = metrics.data.trained_threshold;
   const isInService = Math.abs(p.threshold - inService) < 0.005;
-  const presets: Array<[string, number]> = [["Wide net", 0.1], ["Balanced", trained], ["Sure bets", 0.5]];
+  const presets: Array<[string, number]> = [["Wide net", 0.1], ["Balanced", trained], ["Sure bets", 0.75]];
 
   return (
     <>

@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, FileDown } from "lucide-react";
-import { createAndDownloadReport, getCase, getExplanation, getModelMetrics, getTimeseries, updateCase, type CaseStatus, type Reading } from "@/lib/api";
+import { AlertTriangle, ArrowLeft, CheckCircle2, FileDown } from "lucide-react";
+import {
+  createAndDownloadReport, getCase, getExplanation, getExplanationCheck, getModelMetrics, getTimeseries, updateCase,
+  type CaseStatus, type Reading,
+} from "@/lib/api";
 import { fmtDateTime, fmtInt } from "@/lib/format";
 import { ApiError, Button, Card, CardHeader, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
 import { ConsumptionChart, Gauge, ShapWaterfall } from "@/components/charts";
@@ -41,6 +44,7 @@ export function CaseFilePage() {
   const threshold = metrics.data?.threshold ?? 0.5;
   const explanation = useQuery({ queryKey: ["explanation", customerId], queryFn: () => getExplanation(customerId), enabled: caseQuery.isSuccess });
   const series = useQuery({ queryKey: ["timeseries", customerId], queryFn: () => getTimeseries(customerId), enabled: caseQuery.isSuccess });
+  const check = useQuery({ queryKey: ["explanation-check", customerId], queryFn: () => getExplanationCheck(customerId), enabled: explanation.isSuccess });
   const [note, setNote] = useState("");
 
   useEffect(() => { setNote(caseQuery.data?.note ?? ""); }, [caseQuery.data?.note]);
@@ -137,12 +141,25 @@ export function CaseFilePage() {
         </Card>
       </div>
 
+      <p className="m-0 text-xs text-ink-3">
+        A flag is a reason to inspect, not evidence of theft: conclusions rest on the field investigation, and a customer found honest is cleared.
+      </p>
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card label="Why the model flagged this customer" className="flex flex-col gap-4 p-[22px]">
           <CardHeader title="Why it was flagged" subtitle="SHAP contributions in log-odds: red pushes towards theft, blue away from it." />
           {explanation.data ? (
             <ShapWaterfall baseValue={explanation.data.base_value} probability={explanation.data.probability} reasons={contributions.slice(0, 5)} featureCount={contributions.length} />
           ) : explanation.isError ? <ApiError error={explanation.error} /> : <Skeleton className="h-64" />}
+          {check.data ? (
+            <div role="status" className={`flex items-start gap-2.5 rounded-lg px-3.5 py-3 text-[13px] ${check.data.agrees ? "bg-cobalt-soft text-cobalt-ink" : "bg-amber-bg text-amber-ink"}`}>
+              {check.data.agrees ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
+              <span className="flex flex-col gap-0.5">
+                <span className="font-medium">Second opinion (LIME): {check.data.message}</span>
+                <span className="text-xs opacity-80">LIME's strongest signals: {check.data.lime.map((a) => a.label).join(", ")}</span>
+              </span>
+            </div>
+          ) : check.isError ? <ApiError title="Second opinion unavailable" error={check.error} /> : explanation.data ? <Skeleton className="h-14" /> : null}
         </Card>
 
         <Card label="Case activity" className="flex flex-col gap-4 p-[22px]">

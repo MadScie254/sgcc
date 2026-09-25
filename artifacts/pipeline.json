@@ -1,0 +1,6 @@
+{
+  "name": "xgboost",
+  "preprocessing": "raw",
+  "cleaning": null,
+  "impute": null
+}

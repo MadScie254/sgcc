@@ -12,8 +12,9 @@ from fastapi.testclient import TestClient
 import backend.main as main
 import backend.services.reports as reports_service
 from backend.main import app, resolve_frontend_file
-from backend.services.config import get_paths
-from backend.services.data import get_feature_matrix
+from backend.services.config import get_config, get_paths
+from backend.services.data import get_feature_matrix, get_pipeline_spec, get_wide_data
+from src.pipeline import model_input
 from tests.conftest import DEMO_DATASET, sgcc_frame
 
 
@@ -94,8 +95,16 @@ def test_operating_curve_and_distribution(client):
 
 def test_comparison_drivers_training(client):
     rows = client.get("/api/model/comparison").json()
-    assert [r["model"] for r in rows] == ["xgboost", "random_forest", "logistic_regression"]
-    assert rows[0]["auc"] > rows[1]["auc"] > rows[2]["auc"]
+    assert [r["model"] for r in rows] == ["proposed", "xgboost", "xgboost_default", "random_forest_smote", "logistic_regression_smote"]
+    served = [r for r in rows if r["served"]]
+    assert len(served) == 1 and served[0]["model"] in {"proposed", "xgboost"}
+    assert all(r["inference_ms_per_customer"] > 0 and r["model_size_mb"] > 0 and 0 < r["threshold"] < 1 for r in rows)
+    assert {r["treatment"] for r in rows} == {"none", "smote", "smote_enn"}
+
+    resampling = client.get("/api/model/resampling").json()
+    counts = resampling["smote_enn"]["counts"]
+    assert counts["after"]["theft"] > counts["before"]["theft"]
+    assert resampling["config"]["sampling_strategy"] == 0.5
 
     drivers = client.get("/api/model/drivers").json()
     values = [d["mean_abs_shap"] for d in drivers["drivers"]]
@@ -103,8 +112,28 @@ def test_comparison_drivers_training(client):
     assert all(d["label"] and d["risk_when"] in {"higher", "lower", "unclear"} for d in drivers["drivers"])
 
     training = client.get("/api/model/training").json()
-    assert training["n_features"] == 85
-    assert [s["name"] for s in training["stages"]] == ["Load", "Features", "Tune", "Threshold", "Evaluate", "Baselines", "Publish"]
+    assert training["pipeline"] == served[0]["model"]
+    assert training["train_customers"] > training["validation_customers"] == training["test_customers"] > 0
+    assert [s["name"] for s in training["stages"]] == [
+        "Load", "Clean", "Features", "Split", "Resample", "Tune", "Validate", "Evaluate", "Publish"]
+
+
+def test_explanation_check(client, top_customer):
+    check = client.get(f"/api/customers/{top_customer}/explanation-check").json()
+    assert len(check["shap"]) == len(check["lime"]) == check["top_n"] == 5
+    assert set(check["shared"]) <= {a["feature"] for a in check["shap"]}
+    assert not check["agrees"] or len(check["shared"]) >= 3
+    assert ("review" in check["message"]) != check["agrees"]
+    assert client.get("/api/customers/nope/explanation-check").status_code == 404
+
+
+def test_serving_matches_training_pipeline(client):
+    # The committed spec must describe the committed model, or serving would score differently.
+    assert (get_paths()["artifacts"] / "pipeline.json").is_file()
+    assert get_pipeline_spec()["name"] == client.get("/api/model/training").json()["pipeline"]
+    wide, _ = get_wide_data()
+    X, _ = get_feature_matrix()
+    pd.testing.assert_frame_equal(X, model_input(wide, get_pipeline_spec(), get_config().get("features")))
 
 
 def test_publish_threshold_rescores_and_resets(client):
@@ -139,7 +168,7 @@ def test_timeseries(client, top_customer):
 
 def test_explanation_adds_up(client, top_customer):
     body = client.get(f"/api/customers/{top_customer}/explanation").json()
-    assert len(body["contributions"]) == 85
+    assert len(body["contributions"]) == 87
     logit = body["base_value"] + sum(c["shap_value"] for c in body["contributions"])
     assert 1 / (1 + math.exp(-logit)) == pytest.approx(body["probability"], abs=1e-4)
     assert all(c["label"] and c["display_value"] for c in body["contributions"])

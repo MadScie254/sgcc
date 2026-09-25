@@ -13,3 +13,4 @@ scikit-learn==1.8.0
 xgboost==3.2.0
 shap==0.50.0
 optuna==4.6.0
+imbalanced-learn==0.14.1

@@ -1,0 +1,13 @@
+{
+  "customers": 42372,
+  "days": 1034,
+  "cells": 43812648,
+  "missing_cells": 11233528,
+  "negative_replaced": 0,
+  "capped_above_limit": 260,
+  "outliers_replaced": 413571,
+  "short_gap_cells_interpolated": 290195,
+  "long_gap_cells_filled": 10938163,
+  "customers_without_readings": 5,
+  "customers_with_long_zero_runs": 12807
+}

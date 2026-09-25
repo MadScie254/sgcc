@@ -95,6 +95,9 @@ def risk_tier(probability: float, threshold: float) -> str:
 def predict_proba(features: pd.DataFrame) -> np.ndarray:
     """Probabilities for rows of model features; absent or non-numeric values count as missing."""
     aligned = features.reindex(columns=get_feature_names()).apply(pd.to_numeric, errors="coerce")
+    impute = data_service.get_pipeline_spec().get("impute")
+    if impute:  # the model was trained on gap-free (resampled) rows
+        aligned = aligned.fillna(pd.Series(impute, dtype=float))
     return np.asarray(get_trained_model().predict_proba(aligned)[:, 1], dtype=float)
 
 
@@ -321,30 +324,109 @@ def global_drivers(sample_size: int = 500, top_n: int = 15) -> Dict[str, Any]:
 # Training record
 # ---------------------------------------------------------------------------
 
+def _artifact(name: str) -> Dict[str, Any]:
+    path = get_paths()["artifacts"] / name
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
 def model_comparison() -> List[Dict[str, Any]]:
-    """Hold-out metrics of the served model and the baselines trained on the same split."""
-    keys = ("auc", "pr_auc", "precision", "recall", "f1")
-    saved = get_saved_metrics()
-    rows = [{"model": "xgboost", "label": "XGBoost (in service)", "threshold": get_trained_threshold(),
-             **{k: float(saved.get(k, 0.0)) for k in keys}}]
+    """
+    Every pipeline compared in training, scored on the same test customers at its own
+    validation-chosen threshold, with computational cost and, when scripts/significance.py
+    has run, the Holm-adjusted paired t-test p-value against the proposed pipeline.
+    """
     path = get_paths()["baselines"]
-    baselines = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    for name, label in (("random_forest", "Random forest"), ("logistic_regression", "Logistic regression")):
-        if name in baselines:
-            rows.append({"model": name, "label": label, "threshold": float(baselines[name].get("threshold", 0.5)),
-                         **{k: float(baselines[name].get(k, 0.0)) for k in keys}})
+    results = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    tests = _artifact("significance.json").get("tests", {})
+    keys = ("threshold", "auc", "pr_auc", "precision", "recall", "f1", "gmean", "mcc",
+            "training_time", "inference_ms_per_customer", "model_size_mb")
+    rows = []
+    for name, result in results.items():
+        p_values = {metric: tests.get(metric, {}).get(name, {}).get("t_test_p_holm") for metric in ("pr_auc", "f1")}
+        rows.append({
+            "model": name, "label": result["label"], "served": bool(result.get("served")),
+            "preprocessing": result["preprocessing"], "treatment": result["treatment"],
+            **{key: float(result[key]) for key in keys},
+            "p_value_pr_auc": p_values["pr_auc"], "p_value_f1": p_values["f1"],
+        })
     return rows
+
+
+def resampling_effect() -> Dict[str, Any]:
+    """What SMOTE and SMOTE+ENN did to the training data (Objective 1), from training."""
+    return _artifact("resampling.json")
 
 
 def training_summary() -> Dict[str, Any]:
     saved = get_saved_metrics()
-    params_path = get_paths()["artifacts"] / "best_params.json"
-    keys = ("model_version", "trained_at", "quick_mode", "n_trials", "cv_metric", "cv_best_score",
-            "train_customers", "test_customers", "n_features", "auc", "pr_auc", "precision", "recall", "f1", "threshold")
+    keys = ("pipeline", "pipeline_label", "model_version", "trained_at", "quick_mode", "n_trials", "cv_metric",
+            "cv_best_score", "train_customers", "validation_customers", "test_customers", "n_features",
+            "auc", "pr_auc", "precision", "recall", "f1", "threshold")
     return {
         **{key: saved.get(key) for key in keys},
         "stages": saved.get("stages", []),
-        "best_params": json.loads(params_path.read_text(encoding="utf-8")) if params_path.is_file() else {},
+        "best_params": _artifact("best_params.json"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Second opinion: LIME (proposal section 3.12)
+# ---------------------------------------------------------------------------
+
+EXPLANATION_CHECK_TOP_N = 5
+
+
+@lru_cache(maxsize=1)
+def get_lime_explainer():
+    """LIME explainer over the served customers (gaps filled with medians, as LIME needs)."""
+    from lime.lime_tabular import LimeTabularExplainer
+
+    X, _ = get_feature_matrix()
+    background = X[get_feature_names()]
+    medians = background.median().fillna(0.0)
+    # Decile bins: with LIME's default quartiles its surrogate leans on magnitude features and agrees
+    # with SHAP on fewer cases (8 vs 14 of the 30 highest-risk served customers).
+    explainer = LimeTabularExplainer(background.fillna(medians).to_numpy(), feature_names=get_feature_names(),
+                                     class_names=["honest", "theft"], mode="classification", discretizer="decile",
+                                     random_state=0)
+    return explainer, medians
+
+
+@lru_cache(maxsize=256)
+def explanation_check(customer_id: str) -> Dict[str, Any]:
+    """
+    Compare SHAP's and LIME's strongest features for one customer. They agree when at least
+    3 of the top 5 coincide and SHAP's strongest feature is in LIME's top 5 with the same
+    direction; otherwise the case should be reviewed by a person before acting on either.
+    """
+    names = get_feature_names()
+    shap_top = explain_customer(customer_id)["contributions"][:EXPLANATION_CHECK_TOP_N]
+    explainer, medians = get_lime_explainer()
+    row = _customer_features(customer_id).iloc[0].fillna(medians)
+
+    def class_probabilities(rows: np.ndarray) -> np.ndarray:
+        theft = predict_proba(pd.DataFrame(rows, columns=names))
+        return np.column_stack([1 - theft, theft])
+
+    lime = explainer.explain_instance(row.to_numpy(dtype=float), class_probabilities,
+                                      num_features=EXPLANATION_CHECK_TOP_N, num_samples=5000)
+    lime_weights = {names[i]: float(w) for i, w in lime.as_map()[1]}
+    lime_top = sorted(lime_weights, key=lambda f: -abs(lime_weights[f]))
+    shared = [c["feature"] for c in shap_top if c["feature"] in lime_weights]
+    strongest = shap_top[0]
+    same_direction = strongest["feature"] in lime_weights and np.sign(lime_weights[strongest["feature"]]) == np.sign(strongest["shap_value"])
+    agrees = len(shared) >= 3 and bool(same_direction)
+    return {
+        "customer_id": customer_id,
+        "top_n": EXPLANATION_CHECK_TOP_N,
+        "shap": [{"feature": c["feature"], "label": c["label"], "weight": c["shap_value"]} for c in shap_top],
+        "lime": [{"feature": f, "label": feature_label(f), "weight": lime_weights[f]} for f in lime_top],
+        "shared": shared,
+        "agrees": agrees,
+        "message": (f"SHAP and LIME agree on {len(shared)} of the top {EXPLANATION_CHECK_TOP_N} signals."
+                    if agrees else
+                    f"SHAP and LIME share only {len(shared)} of the top {EXPLANATION_CHECK_TOP_N} signals"
+                    f"{'' if same_direction else ' and disagree on the strongest one'}: review this case manually."),
     }
 
 
@@ -352,6 +434,7 @@ _CACHED = (
     data_service.get_wide_data, data_service.get_feature_matrix, get_trained_model, get_feature_names,
     get_saved_metrics, _operating_threshold_override, get_population_probabilities, get_model_metrics,
     operating_curve, score_distribution, get_shap_explainer, get_flagged_drivers, global_drivers,
+    data_service.get_pipeline_spec, get_lime_explainer, explanation_check,
 )
 
 
