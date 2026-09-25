@@ -8,17 +8,37 @@ what in the proposal text must be corrected before it becomes the thesis.
 Numbers below come from the committed artifacts; re-running the scripts
 reproduces them.
 
-## 1. Outcome in one paragraph
+## 1. Outcome
 
 The proposed framework (cleaned series → SMOTE+ENN on training rows → tuned
-XGBoost) was built exactly as specified and compared, under identical conditions,
-with standard XGBoost, random forest + SMOTE and logistic regression + SMOTE, plus
-an untreated default XGBoost. On the 6,356 untouched test customers it beats both
-SMOTE baselines on every metric and has the **highest recall (0.494) and G-Mean
-(0.677)**. Tuned XGBoost **without** resampling ranks customers better (ROC-AUC 0.851
-vs 0.828, PR-AUC 0.506 vs 0.462) and has higher precision, F1 and MCC, so it is the
-model the console serves. Section 3.13 of the proposal commits to reporting this
-honestly; the significance tests (section 4) say which differences are real.
+XGBoost) was built exactly as specified. It was compared under identical conditions
+with standard XGBoost, random forest + SMOTE, logistic regression + SMOTE, and an
+untreated default XGBoost.
+
+On the 6,356 untouched test customers:
+
+| Pipeline | ROC-AUC | PR-AUC | Recall | Precision | F1 | MCC | G-Mean |
+|---|---|---|---|---|---|---|---|
+| SMOTE+ENN + XGBoost (proposed) | 0.828 | 0.462 | **0.494** | 0.389 | 0.435 | 0.379 | **0.677** |
+| XGBoost, no resampling (served) | **0.851** | **0.506** | 0.426 | **0.532** | **0.473** | **0.433** | 0.641 |
+| XGBoost, default settings | 0.839 | 0.488 | 0.483 | 0.439 | 0.460 | 0.408 | 0.675 |
+| Random forest + SMOTE | 0.812 | 0.411 | 0.432 | 0.366 | 0.396 | 0.336 | 0.634 |
+| Logistic regression + SMOTE | 0.754 | 0.314 | 0.371 | 0.318 | 0.342 | 0.277 | 0.586 |
+
+The 10-fold paired t-tests (Holm-adjusted, α = 0.05) give the same picture
+(`artifacts/significance.json`):
+
+- **Against standard XGBoost**, the proposed framework catches significantly more
+  thefts: recall +0.075, G-Mean +0.038.
+- It is significantly worse on ranking and precision: PR-AUC −0.054, ROC-AUC −0.018,
+  precision −0.143, F1 −0.041, MCC −0.054.
+- **Against both SMOTE baselines** it is significantly better on PR-AUC, recall and
+  G-Mean. Against logistic regression + SMOTE it is better on every metric.
+
+SMOTE+ENN therefore shifts the operating point towards recall. It does not give a
+better model overall. The console serves standard XGBoost because it has the higher
+validation PR-AUC, which is the selection rule fixed before looking at the test set.
+Section 3.13 of the proposal commits to reporting this outcome as it is.
 
 ## 2. Objectives and research questions → evidence
 
