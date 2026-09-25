@@ -104,14 +104,29 @@ Page numbers are the PDF's printed page numbers.
 | §2.3.3 (p. 24) | "LSTM (Legacy Statistical Models)" | LSTM is Long Short-Term Memory; it is not a tree-based method |
 | §3.13 (p. 57) | "Compliance with the Kenyan law on clinical science" | Kenya Data Protection Act, 2019 |
 
+### Citations to correct
+
+| Where | Proposal says | Correct statement |
+|---|---|---|
+| §1.2, §2.3.2, §3.4 | Buzau et al. (2019) analysed 47 papers on the SGCC data (accuracy 90–95%, recall 45–78%) | Buzau et al. (2019) is a study of Endesa's (Spain) industrial and commercial customers in which XGBoost performed best; it is not a review of SGCC papers. Make the accuracy point from the data instead: flagging nobody is 91.5% accurate with zero recall |
+| §2.3.3, §2.4.4 | Punmiya and Choe (2019) reached 77.2% recall on SGCC | They used the Irish CER smart-meter dataset |
+| §2.4.1 | Zheng et al. reached 75.8% theft recall | Zheng et al. (2018) released the SGCC data and reported MAP@100 of about 96% |
+| §2.4.1, §2.5.2 | Li et al. (2019) used LSTM; Gao et al. (2020) used attention | Per their titles: Li et al. combine deep learning with random forests; Gao et al. propose a physically inspired data-driven model |
+| References | — | Missing: Lundberg & Lee (2017), Ribeiro et al. (2016), Creswell (2014), Shadish et al. (2002), Lemaître et al. (2017); add Akiba et al. (2019) for Optuna, Holm (1979), and the Kenya Data Protection Act (2019) |
+
 ### Writing to fix
 
 - Table of contents: every "Error! Bookmark not defined." (pp. 4–6): update the Word fields.
-- Figure 2.7 is referenced but not shown (p. 43).
+- Figure 2.7 (p. 43): the box label "Servier Class Imbalance" should read "Severe"; as the only figure it can be numbered 2.1.
 - p. 15: "CGCC benchmark" → SGCC. p. 18: "Electrocution continues to be…" (garbled). p. 49: "pandasvale", "PLN study", "a dip coma" (garbled).
 - p. 58: "bacterial discrimination", "The First Law", "Treasonous courts", "But do I care? The Columbia Encyclopedia…": rewrite the paragraph.
 - p. 19–20: §1.6 last paragraph and §1.7 first paragraph are hard to follow; restate the limitations plainly (single dataset, noisy labels, no demographics, China vs Kenya).
 - Keywords list "SMOTE" twice.
+- List of Tables names a "Table 2.6" that does not exist.
+- Appendix C: unit cost × quantity does not give the totals (Internet 3,000 × 12 months = 3,000; printing 3,000 × 5 copies = 3,000; binding 1,500 × 5 = 1,500), and "(you'll use part of it)" is a leftover note.
+
+A corrected copy of the whole proposal, with every change highlighted in yellow and a removable summary page, is in
+`docs/proposal/C004_600201_2024_Machimbo_proposal_corrected.docx`.
 
 ## 5. Limitations to state in the thesis
 
