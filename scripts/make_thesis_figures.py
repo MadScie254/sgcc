@@ -13,6 +13,7 @@ plots results on the untouched test customers.
 
 import json
 import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,10 @@ def save(fig, name: str) -> None:
     fig.savefig(OUT / f"{name}.pdf", bbox_inches="tight")
     plt.close(fig)
     print("wrote", name)
+
+
+def wrap(text: str, width: int = 14) -> str:
+    return textwrap.fill(text, width)
 
 
 def label_bars(ax, bars, fmt="{:.3f}", fontsize=7.5):
@@ -188,13 +193,13 @@ def main() -> None:
     ax = axes[0]
     for offset, cls, color in ((-0.2, "honest", BLUE), (0.2, "theft", ORANGE)):
         label_bars(ax, ax.bar(x + offset, [c[cls] for _, _, c in stages], width=0.38, color=color, label=cls.title()), "{:,.0f}", 7)
-    ax.set(xticks=x, title="Training customers by class", ylabel="Rows")
+    ax.set(xticks=x, title="Training customers by class", ylabel="Rows", ylim=(0, 34000))
     ax.set_xticklabels([s_[0].replace(" ", "\n", 1) for s_ in stages], fontsize=8)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, ncol=2, loc="upper center")
     for ax, key, title in zip(axes[1:], ("silhouette", "fisher_ratio_mean", "boundary_noise_theft"),
                               ("Silhouette score\n(class separation)", "Mean Fisher ratio\n(feature separability)",
                                "Boundary noise, theft rows\n(share with honest-majority neighbours)")):
-        bars = ax.bar(x, [d[key] for _, d, _ in stages], width=0.55, color=[INK2, BLUE, ORANGE])
+        bars = ax.bar(x, [d[key] for _, d, _ in stages], width=0.55, color=INK2)
         label_bars(ax, bars, "{:.3f}")
         ax.set(xticks=x, title=title)
         ax.set_xticklabels([s_[0].replace(" ", "\n", 1) for s_ in stages], fontsize=8)
@@ -239,7 +244,7 @@ def main() -> None:
     save(fig, "fig-5-11-model-comparison")
 
     # 5.12 Computational cost
-    fig, axes = plt.subplots(1, 3, figsize=(12, 3.8))
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4.2))
     for ax, (key, title, fmt) in zip(axes, (("training_time", "Training time (s)\nresampling + fitting", "{:.1f}"),
                                             ("inference_ms_per_customer", "Inference time per customer (ms)", "{:.3f}"),
                                             ("model_size_mb", "Model size (MB)", "{:.2f}"))):
@@ -247,7 +252,7 @@ def main() -> None:
         bars = ax.bar(np.arange(len(order)), [comparison[n][key] for n in order], color=[COLORS[n] for n in order])
         label_bars(ax, bars, fmt, 7.5)
         ax.set(xticks=np.arange(len(order)), title=title)
-        ax.set_xticklabels([label[n].replace(" + ", "\n+ ").replace(", ", ",\n").replace(" (", "\n(") for n in order], fontsize=7)
+        ax.set_xticklabels([wrap(label[n], 12) for n in order], fontsize=7)
     fig.suptitle("Computational cost on a 4-core CPU (no GPU)", fontweight="bold", fontsize=11)
     save(fig, "fig-5-12-computational-cost")
 
@@ -271,9 +276,9 @@ def main() -> None:
         ax.plot(np.arange(1, len(c["train_pr_auc"]) + 1), c["train_pr_auc"], color=BLUE, label="Training rows")
         ax.plot(np.arange(1, len(c["validation_pr_auc"]) + 1), c["validation_pr_auc"], color=ORANGE, label="Validation rows")
         ax.axvline(c["best_iteration"], color=INK, lw=1, ls="--")
-        ax.text(c["best_iteration"], 0.05, f" kept {c['best_iteration']} trees", fontsize=8, color=INK)
+        ax.text(c["best_iteration"], 0.6, f" kept {c['best_iteration']} trees", fontsize=8, color=INK)
         ax.set(title=label[name], xlabel="Boosting rounds (trees)", ylim=(0, 1.02))
-        ax.legend(fontsize=8, loc="lower right")
+        ax.legend(fontsize=8, loc="lower left")
     axes[0].set_ylabel("PR-AUC")
     fig.suptitle("Learning curves with early stopping on validation PR-AUC", fontweight="bold", fontsize=11)
     save(fig, "fig-5-14-learning-curves")
@@ -284,14 +289,15 @@ def main() -> None:
         ax.plot(np.arange(1, len(trials) + 1), trials, "o", ms=4, color=COLORS[name], alpha=0.45)
         ax.plot(np.arange(1, len(trials) + 1), np.maximum.accumulate(trials), color=COLORS[name], label=f"{label[name]} (best {trials.max():.3f})")
     ax.set(xlabel="Optuna trial", ylabel="Cross-validated PR-AUC", title="Hyperparameter search (5-fold CV on training customers)")
-    ax.legend(fontsize=8.5, title="line: best so far · dots: each trial", title_fontsize=8)
+    ax.legend(fontsize=8.5, title="line: best so far · dots: each trial", title_fontsize=8,
+              loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2)
     save(fig, "fig-5-15-tuning-history")
 
     # 5.16 Fold-wise comparison (significance.py)
     significance_path = artifacts / "significance.json"
     if significance_path.exists():
         sig = json.loads(significance_path.read_text())
-        fig, axes = plt.subplots(1, 3, figsize=(12, 3.9))
+        fig, axes = plt.subplots(1, 3, figsize=(13, 4.3))
         for ax, metric, name_ in zip(axes, ("pr_auc", "f1", "recall"), ("PR-AUC", "F1", "Recall")):
             for k, name in enumerate(CANDIDATES):
                 vals = np.array(sig["per_fold"][name][metric])
@@ -300,7 +306,7 @@ def main() -> None:
                 ax.hlines(vals.mean(), k - 0.28, k + 0.28, color=INK, lw=2)
                 ax.text(k, vals.max() + 0.01, f"{vals.mean():.3f}", ha="center", fontsize=7.5, color=INK2)
             ax.set(title=f"{name_}, {sig['folds']} folds", xticks=np.arange(len(CANDIDATES)))
-            ax.set_xticklabels([label[n].replace(" + ", "\n+ ").replace(", ", ",\n").replace(" (", "\n(") for n in CANDIDATES], fontsize=6.5)
+            ax.set_xticklabels([wrap(label[n], 12) for n in CANDIDATES], fontsize=6.5)
         fig.suptitle("10-fold cross-validation: each dot a fold, bar the mean (paired tests in artifacts/significance.json)",
                      fontweight="bold", fontsize=10.5)
         save(fig, "fig-5-16-fold-comparison")

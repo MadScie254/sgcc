@@ -19,42 +19,68 @@ winning model served by a FastAPI backend, and a React operations console.
 
 ## Model
 
-XGBoost on 85 features per customer, tuned with Optuna on cross-validated
-PR-AUC. Hold-out results (20% of customers, never seen in tuning or fitting):
+The research proposal's framework, **SMOTE+ENN + tuned XGBoost**, is compared with
+standard XGBoost, random forest + SMOTE, logistic regression + SMOTE and an untreated
+default XGBoost. All five use the same customers and the same 70/15/15 split, and
+each is scored at the threshold that maximised F1 on the validation customers.
+
+Results on the 6,356 test customers, never used for tuning, early stopping or
+thresholds:
 
 <!-- metrics:start -->
-| Model | ROC-AUC | PR-AUC | Recall | Precision | F1 |
-|---|---|---|---|---|---|
-| XGBoost (threshold 0.228) | 0.847 | 0.506 | 0.432 | 0.553 | 0.485 |
-| Random forest (baseline, 0.5) | 0.816 | 0.417 | 0.115 | 0.783 | 0.200 |
-| Logistic regression (baseline, 0.5) | 0.755 | 0.272 | 0.651 | 0.175 | 0.276 |
+| Pipeline | ROC-AUC | PR-AUC | Recall | Precision | F1 | MCC | G-Mean | ms / customer |
+|---|---|---|---|---|---|---|---|---|
+| SMOTE+ENN + XGBoost (proposed) | 0.828 | 0.462 | **0.494** | 0.389 | 0.435 | 0.379 | **0.677** | 0.002 |
+| **XGBoost, no resampling (served)** | **0.851** | **0.506** | 0.426 | **0.532** | **0.473** | **0.433** | 0.641 | 0.002 |
+| XGBoost, default settings | 0.839 | 0.488 | 0.483 | 0.439 | 0.460 | 0.408 | 0.675 | 0.001 |
+| Random forest + SMOTE | 0.812 | 0.411 | 0.432 | 0.366 | 0.396 | 0.336 | 0.634 | 0.029 |
+| Logistic regression + SMOTE | 0.754 | 0.314 | 0.371 | 0.318 | 0.342 | 0.277 | 0.586 | 0.001 |
 
-Test set: 8,475 customers (723 theft). Cross-validated PR-AUC on the training split: 0.523.
+542 of the 6,356 test customers are thefts. Served threshold: 0.499.
 <!-- metrics:end -->
 
-Full numbers: `artifacts/metrics.json` and `models/baselines/comparison_results.json`.
+The 10-fold paired t-tests (Holm-adjusted, α = 0.05, `scripts/significance.py`) back
+this up:
 
-What drives it (5-fold CV on all customers, `python scripts/ablation.py`, results in `artifacts/ablation.json`):
+- **Recall and G-Mean:** SMOTE+ENN catches significantly more thefts than standard
+  XGBoost (+0.075 recall, +0.038 G-Mean).
+- **Ranking and precision:** it is significantly worse on PR-AUC (−0.054), ROC-AUC,
+  precision, F1 and MCC.
+- **SMOTE baselines:** it beats both on PR-AUC, recall and G-Mean.
+
+The console serves the pipeline with the higher validation PR-AUC, standard XGBoost.
+`docs/proposal-alignment.md` discusses the outcome against the proposal's objectives.
+
+What each part is worth (5-fold CV on all 42,372 customers, one change at a time,
+`python scripts/ablation.py`, `artifacts/ablation.json`):
 
 | Variant | ROC-AUC | PR-AUC |
 |---|---|---|
-| 17 original features, dates in file order | 0.794 | 0.364 |
-| 17 original features, dates sorted | 0.796 | 0.365 |
-| 85 features, dates in file order | 0.857 | 0.523 |
-| **85 features, dates sorted (this model)** | **0.862** | **0.532** |
-| 85 features + SMOTE-ENN | 0.838 | 0.424 |
+| A. Raw readings, the proposal's 25 core features | 0.831 | 0.447 |
+| **B. Raw readings, all 87 features (standard XGBoost)** | **0.854** | **0.509** |
+| C. Cleaned readings (proposal section 3.7), all features | 0.847 | 0.490 |
+| D. Cleaned + SMOTE | 0.831 | 0.453 |
+| E. Cleaned + SMOTE+ENN (proposed) | 0.827 | 0.414 |
+| F. B with scale_pos_weight = 1 | 0.856 | 0.511 |
+| G. B with XGBoost's default hyperparameters | 0.839 | 0.475 |
 
-- **Richer features** are the main gain: missing and zero patterns kept as signal
-  (XGBoost handles NaN natively), day-over-day drops, trends, year-over-year ratios,
-  change points and a 34-month relative consumption profile.
-- **No resampling.** SMOTE-ENN costs 0.11 PR-AUC. The decision threshold is chosen
-  from out-of-fold predictions (max F1).
-- **Chronological order** is a correctness fix (the raw header stores dates as
-  `2014/1/1, 2014/1/10, ...`) with a small effect on scores (+0.006 ROC-AUC).
+- **Features are the main gain:** +0.061 PR-AUC from the 25 core features to all 87.
+  The extra features are gaps and zero runs, drops, trends, reversals, year-over-year
+  ratios, change points, and a 34-month usage profile.
+- **Tuning helps:** +0.034 PR-AUC over default hyperparameters.
+- **Imputation and resampling cost ranking quality.** Filling gaps smooths away theft
+  signal, and SMOTE+ENN shifts the model towards recall rather than a better ranking.
+- **SMOTE+ENN does clean the training data** (Objective 1, `artifacts/resampling.json`).
+  ENN removes 4,539 honest boundary rows, the Fisher ratio rises from 0.014 to 0.022,
+  and the share of theft rows with honest-majority neighbours falls from 90% to 23%.
+  That cleaner training data does not carry over to better test-set ranking.
+- The ablation pools out-of-fold predictions before scoring. That penalises
+  resampled models, whose calibration varies more between folds. This is why E
+  (0.414) sits below the per-fold mean of the significance run (0.452).
 
 ## Run the app
 
-The trained model (`models/xgb_best.ubj`) and a demo population of 3,000 held-out
+The trained model (`models/xgb_best.ubj`) and a demo population of 3,000 test
 customers (`data/sgcc_demo.csv.gz`) are committed, so no training or downloads are needed.
 
 Requirements: Python 3.11–3.13, Node.js 20+, Git. Works on Windows, Linux and

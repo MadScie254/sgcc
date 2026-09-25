@@ -47,16 +47,6 @@ def classification_metrics(y_true, proba, threshold: float = 0.5) -> Dict:
     }
 
 
-def evaluate_model(model, X_test: pd.DataFrame, y_test: pd.Series, threshold: float = 0.5) -> Dict:
-    """Evaluate a fitted classifier on held-out data."""
-    metrics = classification_metrics(y_test, model.predict_proba(X_test)[:, 1], threshold)
-    logger.info(
-        "Test AUC %.4f | PR-AUC %.4f | recall %.4f | precision %.4f | F1 %.4f @ %.3f",
-        metrics["auc"], metrics["pr_auc"], metrics["recall"], metrics["precision"], metrics["f1"], threshold,
-    )
-    return metrics
-
-
 def feature_importance(model, feature_names) -> pd.DataFrame:
     """Gain-based importance, normalised to sum to 1, sorted descending."""
     gain = model.get_booster().get_score(importance_type="gain")
