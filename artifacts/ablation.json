@@ -1,22 +1,47 @@
 {
-  "A. 17 features, dates unsorted": {
-    "roc_auc": 0.7943998480299511,
-    "pr_auc": 0.3643310352608812
-  },
-  "B. 17 features, dates sorted": {
-    "roc_auc": 0.7956635148155631,
-    "pr_auc": 0.3653862969385098
-  },
-  "C. 85 features, dates unsorted": {
-    "roc_auc": 0.8566685441662597,
-    "pr_auc": 0.5231693769492183
-  },
-  "D. 85 features, dates sorted": {
-    "roc_auc": 0.8623153856006238,
-    "pr_auc": 0.532187126913449
-  },
-  "E. 85 features + SMOTE-ENN": {
-    "roc_auc": 0.8381990264481202,
-    "pr_auc": 0.42399147945228877
+  "base_rate": 0.08531577456811101,
+  "variants": {
+    "A. Raw, 25 core features": {
+      "roc_auc": 0.8314565796011472,
+      "pr_auc": 0.44749435946490473,
+      "features": 25,
+      "treatment": "none"
+    },
+    "B. Raw, all features (standard XGBoost)": {
+      "roc_auc": 0.8541014694137615,
+      "pr_auc": 0.5086149293000717,
+      "features": 87,
+      "treatment": "none"
+    },
+    "C. Cleaned, all features": {
+      "roc_auc": 0.8473204697667429,
+      "pr_auc": 0.48984500269287745,
+      "features": 87,
+      "treatment": "none"
+    },
+    "D. Cleaned + SMOTE": {
+      "roc_auc": 0.8305151461328844,
+      "pr_auc": 0.4528647812054011,
+      "features": 87,
+      "treatment": "smote"
+    },
+    "E. Cleaned + SMOTE+ENN (proposed)": {
+      "roc_auc": 0.8265456245070048,
+      "pr_auc": 0.4142110409607505,
+      "features": 87,
+      "treatment": "smote_enn"
+    },
+    "F. B with scale_pos_weight = 1": {
+      "roc_auc": 0.8558274414783806,
+      "pr_auc": 0.5106854446524938,
+      "features": 87,
+      "treatment": "none"
+    },
+    "G. B with default hyperparameters": {
+      "roc_auc": 0.838676009841224,
+      "pr_auc": 0.47508531085650024,
+      "features": 87,
+      "treatment": "none"
+    }
   }
 }

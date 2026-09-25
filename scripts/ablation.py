@@ -24,6 +24,7 @@ artifacts/ablation.json and docs/thesis-figures/fig-5-6-ablation.png/.pdf.
 import argparse
 import json
 import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -89,7 +90,7 @@ def main() -> None:
 
 def plot(data: dict) -> None:
     results, base_rate = data["variants"], data["base_rate"]
-    fig, ax = plt.subplots(figsize=(10, 4.2))
+    fig, ax = plt.subplots(figsize=(10, 4.6))
     names = list(results)
     x = np.arange(len(names))
     for offset, key, color, label in ((-0.2, "roc_auc", BLUE, "ROC-AUC"), (0.2, "pr_auc", ORANGE, "PR-AUC")):
@@ -99,7 +100,7 @@ def plot(data: dict) -> None:
             ax.text(xi, v + 0.012, f"{v:.3f}", ha="center", fontsize=7.5, color=INK2)
     ax.axhline(base_rate, color="#b9b8b2", lw=1, ls="--", label=f"PR-AUC of random guessing ({base_rate:.3f})")
     ax.set(xticks=x, ylim=(0, 1.08), ylabel="5-fold cross-validated score")
-    ax.set_xticklabels([n.replace(", ", ",\n", 1).replace(" (", "\n(").replace(" with ", "\nwith ") for n in names], fontsize=7.5)
+    ax.set_xticklabels([textwrap.fill(n, 16) for n in names], fontsize=7.5)
     ax.set_title("Ablation: features, cleaning, resampling and tuning (42,372 customers)", fontweight="bold", fontsize=11, pad=14)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="y", color=GRID)
