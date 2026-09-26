@@ -196,13 +196,26 @@ With PostgreSQL installed locally (the Windows installer from postgresql.org, ve
 
 ```bat
 conda activate ml_env
-pip install -r requirements.lock
+pip install --isolated -r requirements.lock
+set PGPASSWORD=<the postgres password chosen at installation>
 python scripts/setup_database.py
 uvicorn backend.main:app --reload
 ```
 
-`setup_database.py` asks for the password of the `postgres` superuser (the one chosen
-during installation) and for a password for the app's own role (Enter reuses the same).
+`--isolated` makes pip ignore extra package indexes in your pip settings (an unreachable
+one, such as NVIDIA's, otherwise retries every package). If pip stops with
+`Cannot uninstall pytz ... no RECORD file` (a package conda installed), run
+`pip install --ignore-installed --no-deps pytz==2026.3.post1` and install again: pip
+stops at the first failure, so nothing else was installed.
+
+If the setup script reports that the password was rejected, it also checks ports
+5433–5435: a second PostgreSQL there usually means an older installation owns 5432 and
+version 18 went to 5433 (`--port 5433`). It prints how to reset a forgotten password.
+`PGPASSWORD` avoids the hidden password prompt, where Ctrl+V does not paste.
+
+`setup_database.py` logs in as the `postgres` superuser (password from `PGPASSWORD`, or
+asked for) and gives the app's own role the same password (without `PGPASSWORD` it asks,
+and Enter reuses the same).
 It creates the role `gridsentinel`, the database `gridsentinel` for the console and
 `gridsentinel_test` for the tests, creates the tables, and writes `DATABASE_URL` and
 `TEST_DATABASE_URL` into `.env`. It needs neither `psql` nor Docker, and running it
