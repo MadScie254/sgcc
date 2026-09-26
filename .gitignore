@@ -74,6 +74,8 @@ artifacts/**
 !artifacts/deep_baseline.json
 !artifacts/hybrid_study.json
 !artifacts/sequence.json
+!artifacts/nested_cv.json
+!artifacts/cnn_checks.json
 !artifacts/predictions/extensions_validation.csv.gz
 !artifacts/predictions/extensions_test.csv.gz
 
