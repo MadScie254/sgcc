@@ -80,6 +80,11 @@ proposal's title, a *hybrid ensemble*, in a different form from the one proposed
 ensemble that works combines two views of the customer (engineered features and the raw
 daily series), not resampling with boosting.
 
+Nested cross-validation of the whole procedure over all 42,372 customers confirms the
+hybrid (PR-AUC 0.629 ± 0.021 against 0.507 ± 0.016 for XGBoost; best on all five folds).
+Most of its advantage comes from the CNN's channel marking missing readings: without it the
+hybrid scores 0.525 (`artifacts/nested_cv.json`, `cnn_checks.json`; Fig. 5.27, 5.28).
+
 An earlier version of this analysis used paired t-tests over ten cross-validation
 folds of the training and validation customers. It was replaced because those
 customers had already been used to choose the hyperparameters and thresholds, and the

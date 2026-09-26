@@ -83,6 +83,8 @@ Tables for Chapter 3: the Appendix A tables are filled in `docs/data-quality.md`
 | 5.24 | `fig-5-24-history-length` | practice | *Detection quality with only the most recent 3 to 34 months of readings (standard XGBoost).* PR-AUC 0.274 (3 months), 0.319 (12), 0.396 (24), 0.513 (34). `artifacts/history_length.json` |
 | 5.25 | `fig-5-25-extension-pr-curves` | RQ4 / literature | *Precision-recall curves of standard XGBoost, the proposed pipeline, raw-readings SMOTE+ENN and the Wide & Deep CNN on the test customers.* The CNN (Zheng et al., 2018 style, trained on a CPU) is below XGBoost at the very top of the list and above it from about 35% recall on. `artifacts/deep_baseline.json` |
 | 5.26 | `fig-5-26-hybrid-splits` | RQ4 / SO4, the served model | *The hybrid ensemble (0.55 × CNN + 0.45 × XGBoost, recalibrated) against its two parts on six random splits (CNN weight 0.55 on every split).* The hybrid is highest on all six: PR-AUC 0.633 ± 0.012, against 0.563 ± 0.017 (CNN) and 0.510 ± 0.007 (XGBoost). On the study's split it reaches 0.617 (95% CI 0.579–0.654), significantly above XGBoost (+0.104) and the CNN (+0.078). `artifacts/hybrid_study.json` |
+| 5.27 | `fig-5-27-nested-cv` | RQ4, validity | *Nested cross-validation of the whole hybrid procedure over all 42,372 customers.* Every customer is scored once by models that never saw them: hybrid 0.629 ± 0.021, CNN 0.553 ± 0.014, XGBoost 0.507 ± 0.016; the hybrid is best on all five folds. `artifacts/nested_cv.json` |
+| 5.28 | `fig-5-28-cnn-checks` | validity | *Checks of the sequence model: five training seeds (hybrid 0.631 ± 0.011) and the CNN without its missing-reading channel (CNN 0.335, hybrid 0.525).* The CNN's advantage comes mostly from the pattern of missing readings. `artifacts/cnn_checks.json` |
 
 Table for the literature comparison: MAP@100/200, precision in the top 1% and 5%, recall
 in the top 5% and 10%, and value under an inspection budget for every pipeline, with
@@ -116,6 +118,8 @@ python scripts/history_length.py         # figure 5.24 (~5 min)
 python scripts/deep_baseline.py          # figure 5.25 (PyTorch: pip install -r requirements-research.txt); --splits
 python scripts/literature_metrics.py     # MAP@N and budget table (reads the saved predictions)
 python scripts/hybrid_study.py           # figure 5.26 (~30 min); --significance: the served split's tests
+python scripts/nested_cv.py              # figure 5.27 (~1.5 h)
+python scripts/cnn_checks.py             # figure 5.28 (~40 min)
 ```
 
 The screenshots (4.x, 5.7) were captured from the running console (production mode,

@@ -163,9 +163,27 @@ make different mistakes, so the console serves a blend of the two:
 - **Explanations:** the case page shows SHAP for the XGBoost part and, for the CNN part,
   how much each week raised its score in log-odds (the week replaced by the customer's
   typical day). `GET /api/customers/{id}/sequence-explanation` returns the weeks.
-- **A caveat:** like XGBoost's missing-reading features, the CNN uses gaps. Around the
-  missing 2016-09-18 release date, September 2016 is the week that most raises the score of
-  9 of the 40 highest-risk customers in service.
+- **A caveat:** like XGBoost's missing-reading features, the CNN uses gaps, and they carry
+  most of its advantage (see the checks below). Around the missing 2016-09-18 release date,
+  September 2016 is the week that most raises the score of 9 of the 40 highest-risk customers
+  in service, although replacing that month barely changes the results.
+
+**Checks of the served hybrid** (`scripts/nested_cv.py`, `scripts/cnn_checks.py`; Figures
+5.27 and 5.28):
+
+- **Nested cross-validation.** The whole procedure (Optuna tuning, CNN training, blend weight,
+  calibration, threshold) was repeated inside five outer folds of all 42,372 customers, so every
+  customer is scored once by models that never saw them. PR-AUC: hybrid 0.629 ± 0.021 (pooled
+  0.629, 95% CI 0.614 to 0.643), CNN 0.553 ± 0.014, XGBoost 0.507 ± 0.016. The hybrid is best on
+  all five folds. This removes the concern that the hybrid was designed after the CNN's test result.
+- **Training seeds.** Across five CNN seeds, the hybrid scores 0.631 ± 0.011 on the study's test
+  customers (the served seed, 0.617, is the lowest).
+- **Missing readings.** Most of the CNN's advantage comes from its channel marking which readings
+  are missing. Without it, the CNN falls from 0.538 to 0.335 and the hybrid to 0.525, barely above
+  XGBoost (0.513). Replacing September 2016 as well changes little (0.520). With no
+  missing-reading information in either part, the hybrid reaches 0.433 against 0.404 for
+  XGBoost alone. The day-by-day pattern of missing readings is therefore the hybrid's main
+  signal, and its value depends on how a utility's meter data go missing.
 
 Without PyTorch, training falls back to the study's five pipelines and serves standard
 XGBoost, as before.
@@ -374,6 +392,8 @@ pip install -r requirements-research.txt
 python scripts/deep_baseline.py        # Wide & Deep CNN, CPU (~5 min); --splits: the other five splits (~20 min)
 python scripts/literature_metrics.py   # MAP@100/200, top-share precision, budget value (~1 min)
 python scripts/hybrid_study.py         # the hybrid on six random splits (~30 min); --significance: served split only
+python scripts/nested_cv.py            # nested cross-validation of the whole hybrid procedure (~1.5 h)
+python scripts/cnn_checks.py           # CNN training seeds and missing-reading ablation (~40 min)
 ```
 
 On an NVIDIA GPU (for example a Quadro P2000; Windows, conda `ml_env`), add `--device cuda`
