@@ -15,7 +15,12 @@ Follows the proposal's protocol:
 6. Fit every candidate in ``src.experiment``; tuned XGBoost stops early on validation.
    Each candidate is Platt-calibrated on validation (``src.calibration``), and its decision
    threshold maximises F1 on the calibrated validation probabilities.
-7. Serve the XGBoost pipeline with the higher validation PR-AUC.
+   With PyTorch installed (requirements-research.txt), the sequence model (src.sequence, a Wide &
+   Deep CNN on the daily readings) is trained too, and the hybrid pipeline blends it with
+   standard XGBoost: w * CNN + (1 - w) * XGBoost on calibrated probabilities, w chosen on
+   validation PR-AUC, recalibrated and thresholded on validation.
+7. Serve the servable pipeline (the two tuned XGBoost pipelines, and the hybrid when trained)
+   with the highest validation PR-AUC.
 8. Score the test customers once: effectiveness, calibration and computational cost (section 3.11).
    Every candidate's validation and test predictions are saved, so the significance tests
    (scripts/significance.py) and the research API never refit or rescore anything.
@@ -48,6 +53,15 @@ from .modeling import save_model, select_threshold, tune_xgb
 from .preprocessing import clean_series
 from .publish import Publisher, git_revision, library_versions, sha256
 from .resampling import Treatment, diagnostics
+from . import sequence
+
+SEQUENCE, HYBRID = "wide_deep_cnn", "hybrid"
+EXTRA_SPECS = {
+    SEQUENCE: {"label": "Wide & Deep CNN (sequence model)", "preprocessing": "clean", "treatment": "none",
+               "learner": "wide_deep_cnn", "tuned": False},
+    HYBRID: {"label": "Hybrid: CNN + XGBoost", "preprocessing": "raw+sequence", "treatment": "none",
+             "learner": "hybrid", "tuned": True},
+}
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +230,50 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
                                           min_precision=float(eval_cfg.get("min_precision", 0.5))),
         }
         logger.info("%s: validation PR-AUC %.4f", name, validation[name]["pr_auc"])
-    winner = max(SERVABLE, key=lambda name: validation[name]["pr_auc"])
-    logger.info("Serving %s", winner)
     mark("Validate")
+
+    # 6b. The sequence model and the hybrid (needs PyTorch; skipped otherwise)
+    hybrid_cfg = model_cfg.get("hybrid", {}) or {}
+    servable = list(SERVABLE)
+    extra: Dict[str, Dict[str, Any]] = {}
+    if hybrid_cfg.get("enabled", True) and sequence.torch_available():
+        values, mask = sequence.prepare(wide, config.get("preprocessing"))
+        position = {c: i for i, c in enumerate(wide.index)}
+        rows = {name: np.array([position[c] for c in idx]) for name, idx in
+                (("train", train_idx), ("val", val_idx), ("test", test_idx))}
+        start = time.perf_counter()
+        network, history = sequence.train_network(
+            values[rows["train"]], mask[rows["train"]], y_train.to_numpy(dtype=int),
+            values[rows["val"]], mask[rows["val"]], y_val.to_numpy(dtype=int),
+            device=device, seed=random_state, settings=hybrid_cfg.get("sequence"), log=logger.info)
+        sequence_seconds = time.perf_counter() - start
+        raw_val[SEQUENCE] = sequence.predict_network(network, values[rows["val"]], mask[rows["val"]])
+        platt = fit_platt(raw_val[SEQUENCE], y_val)
+        cal_val[SEQUENCE] = apply_platt(raw_val[SEQUENCE], platt)
+        validation[SEQUENCE] = {"pr_auc": float(average_precision_score(y_val, raw_val[SEQUENCE])), "platt": platt,
+                                "threshold": select_threshold(y_val, cal_val[SEQUENCE], strategy=eval_cfg.get("threshold_strategy", "f1"),
+                                                              min_precision=float(eval_cfg.get("min_precision", 0.5)))}
+        step = float(hybrid_cfg.get("weight_step", 0.05))
+        grid = np.round(np.arange(0.0, 1.0 + 1e-9, step), 4)
+        scores = [average_precision_score(y_val, w * cal_val[SEQUENCE] + (1 - w) * cal_val["xgboost"]) for w in grid]
+        weight = float(grid[int(np.argmax(scores))])
+        raw_val[HYBRID] = weight * cal_val[SEQUENCE] + (1 - weight) * cal_val["xgboost"]
+        platt = fit_platt(raw_val[HYBRID], y_val)
+        cal_val[HYBRID] = apply_platt(raw_val[HYBRID], platt)
+        validation[HYBRID] = {"pr_auc": float(average_precision_score(y_val, raw_val[HYBRID])), "platt": platt,
+                              "threshold": select_threshold(y_val, cal_val[HYBRID], strategy=eval_cfg.get("threshold_strategy", "f1"),
+                                                            min_precision=float(eval_cfg.get("min_precision", 0.5))),
+                              "weight_sequence": weight}
+        extra = {"network": network, "history": history, "seconds": sequence_seconds, "values": values,
+                 "mask": mask, "rows": rows, "weight": weight}
+        servable.append(HYBRID)
+        logger.info("Sequence model: validation PR-AUC %.4f; hybrid (w=%.2f): %.4f",
+                    validation[SEQUENCE]["pr_auc"], weight, validation[HYBRID]["pr_auc"])
+        mark("Sequence")
+    else:
+        logger.info("Sequence model skipped (PyTorch not installed or model.hybrid.enabled is false)")
+    winner = max(servable, key=lambda name: validation[name]["pr_auc"])
+    logger.info("Serving %s", winner)
 
     # 7. Test set, once
     comparison, calibration = {}, {}
@@ -238,6 +293,33 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
             "model_size_mb": model_size_mb(fitted[name].model),
             "served": name == winner,
         }
+    if extra:
+        rows, values, mask = extra["rows"], extra["values"], extra["mask"]
+        start = time.perf_counter()
+        raw_test[SEQUENCE] = sequence.predict_network(extra["network"], values[rows["test"]], mask[rows["test"]])
+        sequence_ms = 1000 * (time.perf_counter() - start) / len(test_idx)
+        cal_test[SEQUENCE] = apply_platt(raw_test[SEQUENCE], validation[SEQUENCE]["platt"])
+        w = extra["weight"]
+        raw_test[HYBRID] = w * cal_test[SEQUENCE] + (1 - w) * cal_test["xgboost"]
+        cal_test[HYBRID] = apply_platt(raw_test[HYBRID], validation[HYBRID]["platt"])
+        sequence_mb = sequence.parameter_count(extra["network"]) * 4 / 1e6
+        costs = {SEQUENCE: (extra["seconds"], sequence_ms, sequence_mb),
+                 HYBRID: (extra["seconds"] + comparison["xgboost"]["training_time"],
+                          sequence_ms + comparison["xgboost"]["inference_ms_per_customer"],
+                          sequence_mb + comparison["xgboost"]["model_size_mb"])}
+        for name in (SEQUENCE, HYBRID):
+            calibration[name] = calibration_report(y_val, y_test, raw_val[name], raw_test[name], validation[name]["platt"])
+            comparison[name] = {
+                **EXTRA_SPECS[name],
+                **classification_metrics(y_test, cal_test[name], validation[name]["threshold"]),
+                "at_threshold_0_5": classification_metrics(y_test, cal_test[name], 0.5),
+                "validation_pr_auc": validation[name]["pr_auc"],
+                "training_time": round(costs[name][0], 2),
+                "inference_ms_per_customer": costs[name][1],
+                "model_size_mb": costs[name][2],
+                "served": name == winner,
+            }
+        comparison[HYBRID]["weight_sequence"] = extra["weight"]
     mark("Evaluate")
 
     # 8. Publish: stage every file, move them into place, then write the manifest.
@@ -246,14 +328,17 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
     rel = {"model": config["paths"]["model_file"], "artifacts": config["paths"]["artifacts"],
            "models": config["paths"]["models"], "population": data_cfg["serving_data_path"]}
     out = Publisher(root)
-    served = fitted[winner]
-    spec = CANDIDATES[winner]
+    # The hybrid is served as its XGBoost part (the model file, explained with SHAP) plus the sequence
+    # model (ONNX), blended and recalibrated as frozen in the pipeline spec.
+    tree_part = "xgboost" if winner == HYBRID else winner
+    served = fitted[tree_part]
+    spec = CANDIDATES[tree_part]
     X_served = X_by[spec["preprocessing"]]
     trained_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     save_model(served.model, str(out.path(rel["model"])))
-    out.json(f"{rel['artifacts']}/pipeline.json", {
+    pipeline_spec = {
         "name": winner,
-        "label": spec["label"],
+        "label": EXTRA_SPECS[winner]["label"] if winner == HYBRID else spec["label"],
         "model_version": str(model_cfg.get("version", "unknown")),
         "trained_at": trained_at,
         "preprocessing": spec["preprocessing"],
@@ -264,10 +349,30 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         "calibration": {"method": "platt", **validation[winner]["platt"]},
         "threshold": validation[winner]["threshold"],
         "provenance": provenance,
-    })
+    }
+    if winner == HYBRID:
+        sequence_file = str(model_cfg.get("sequence_file", "models/sequence.onnx"))
+        sequence.export_onnx(extra["network"], out.path(sequence_file))
+        pipeline_spec["components"] = {
+            "xgboost": {"label": CANDIDATES["xgboost"]["label"], "calibration": {"method": "platt", **validation["xgboost"]["platt"]}},
+            SEQUENCE: {"label": EXTRA_SPECS[SEQUENCE]["label"], "file": sequence_file, "days": sequence.DAYS,
+                       "weeks": sequence.WEEKS, "cleaning": config.get("preprocessing"),
+                       "calibration": {"method": "platt", **validation[SEQUENCE]["platt"]},
+                       "parameters": sequence.parameter_count(extra["network"])},
+        }
+        pipeline_spec["blend"] = {"weight_sequence": extra["weight"], "on": "calibrated probabilities",
+                                  "recalibrated": "platt on validation"}
+    out.json(f"{rel['artifacts']}/pipeline.json", pipeline_spec)
+    if extra:
+        out.json(f"{rel['artifacts']}/sequence.json", {
+            "history": extra["history"], "seconds": round(extra["seconds"], 1),
+            "parameters": sequence.parameter_count(extra["network"]), "weight_sequence": extra["weight"],
+            "settings": {**sequence.TRAINING_DEFAULTS, **(hybrid_cfg.get("sequence") or {})},
+            "validation_pr_auc": {name: validation[name]["pr_auc"] for name in (SEQUENCE, HYBRID, "xgboost")},
+        })
     out.json(f"{rel['artifacts']}/calibration.json", {
         "method": "platt", "fitted_on": "validation", "served": winner, "pipelines": calibration})
-    out.json(f"{rel['artifacts']}/best_params.json", tuned[winner]["params"])
+    out.json(f"{rel['artifacts']}/best_params.json", tuned[tree_part]["params"])
     out.json(f"{rel['artifacts']}/tuning.json", tuned)
     out.json(f"{rel['models']}/baselines/comparison_results.json", comparison)
     out.json(f"{rel['artifacts']}/resampling.json", resampling)
@@ -284,18 +389,20 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
     write_population(wide.loc[population], out.path(rel["population"]))
     mark("Publish")
 
+    served_spec = EXTRA_SPECS.get(winner) or CANDIDATES[winner]
     metrics = {
-        **{k: v for k, v in comparison[winner].items() if k not in CANDIDATES[winner]},
+        **{k: v for k, v in comparison[winner].items() if k not in served_spec},
         "pipeline": winner,
-        "pipeline_label": spec["label"],
+        "pipeline_label": served_spec["label"],
         "model_version": str(model_cfg.get("version", "unknown")),
         "trained_at": trained_at,
         "quick_mode": quick_mode,
         "device": device,
-        "cv_best_score": tuned[winner]["cv_best_score"],
-        "cv_fold_scores": tuned[winner]["fold_scores"],
+        # For the hybrid, the tuning record of its XGBoost part.
+        "cv_best_score": tuned[tree_part]["cv_best_score"],
+        "cv_fold_scores": tuned[tree_part]["fold_scores"],
         "cv_metric": optuna_cfg.get("metric", "average_precision"),
-        "n_trials": len(tuned[winner]["trials"]),
+        "n_trials": len(tuned[tree_part]["trials"]),
         "train_customers": int(len(train_idx)),
         "validation_customers": int(len(val_idx)),
         "test_customers": int(len(test_idx)),

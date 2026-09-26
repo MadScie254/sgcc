@@ -181,7 +181,7 @@ class ComparisonRow(BaseModel):
     model: str
     label: str
     served: bool
-    preprocessing: Literal["raw", "clean"]
+    preprocessing: str  # "raw", "clean" or, for the hybrid, "raw+sequence"
     treatment: Literal["none", "smote", "smote_enn"]
     threshold: float
     auc: float
@@ -338,12 +338,40 @@ class TimeSeries(BaseModel):
     points: List[Reading]
 
 
+class ModelPart(BaseModel):
+    """One part of the hybrid: its calibrated probability and its weight in the blend."""
+    name: str
+    label: str
+    probability: float
+    weight: float
+
+
 class Explanation(BaseModel):
     customer_id: str
     probability: float
+    # The SHAP contributions explain the XGBoost model's raw score; for the hybrid that model is one part.
     raw_score: float
+    tree_probability: Optional[float] = None
     base_value: float
     contributions: List[Reason]
+    parts: Optional[List[ModelPart]] = None
+
+
+class WeekEffect(BaseModel):
+    week: int
+    start: Optional[str] = None
+    end: Optional[str] = None
+    effect: float
+
+
+class SequenceExplanation(BaseModel):
+    customer_id: str
+    available: bool
+    label: Optional[str] = None
+    probability: Optional[float] = None
+    raw_score: Optional[float] = None
+    weight: Optional[float] = None
+    weeks: List[WeekEffect]
 
 
 class Attribution(BaseModel):
@@ -379,6 +407,7 @@ class Prediction(BaseModel):
     threshold: float
     risk_tier: Tier
     reasons: List[Reason]
+    parts: Optional[List[ModelPart]] = None
 
 
 # --- Cases -------------------------------------------------------------------

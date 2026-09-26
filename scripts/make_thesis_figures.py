@@ -103,11 +103,16 @@ def main() -> None:
     scores = {name: test[name].to_numpy() for name in CANDIDATES}
     for name, p in scores.items():
         print(f"{name}: test PR-AUC {average_precision_score(yt, p):.4f}")
-    served = spec["name"]
-    threshold = float(spec["threshold"])
+    # The study's figures are about its five pipelines. When the served pipeline is the hybrid (drawn by
+    # scripts/hybrid_study.py), they use its XGBoost part, the best of the five, as the reference: the
+    # model file SHAP explains, at that pipeline's own validation-chosen threshold.
+    served = spec["name"] if spec["name"] in CANDIDATES else "xgboost"
+    in_service = served == spec["name"]
+    threshold = float(spec["threshold"] if in_service else comparison[served]["threshold"])
     p_served = scores[served]
     X_served = model_input(wide.loc[test_idx], spec, spec["feature_config"])[spec["features"]]
     label = {name: s_["label"] for name, s_ in CANDIDATES.items()}
+    served_tag = " (served)" if in_service else ""
 
     # 5.1 ROC and 5.2 precision-recall, every candidate
     fig, ax = plt.subplots(figsize=(5.6, 4.8))
@@ -329,7 +334,7 @@ def main() -> None:
             ax.plot([b["mean_predicted"] for b in bins], [b["observed_rate"] for b in bins], "o-", color=color, ms=5,
                     label=f"{text}, ECE {ece:.3f}")
         ax.plot([0, 1], [0, 1], color="#b9b8b2", lw=1, ls="--", label="Perfect calibration")
-        ax.set(title=f"{label[name]}{' (served)' if name == served else ''}", xlabel="Predicted probability", xlim=(0, 1), ylim=(0, 1))
+        ax.set(title=f"{label[name]}{served_tag if name == served else ''}", xlabel="Predicted probability", xlim=(0, 1), ylim=(0, 1))
         ax.legend(fontsize=8, loc="upper left")
     axes[0].set_ylabel("Observed theft rate")
     fig.suptitle("Calibration on the test customers (Platt scaling fitted on validation customers)", fontweight="bold", fontsize=11)
@@ -344,7 +349,7 @@ def main() -> None:
     flagged = (p_served >= threshold).mean()
     ax.plot([0, 1], [0, 1], color="#b9b8b2", lw=1, ls="--", label="Random inspection")
     ax.axvline(flagged, color=INK, lw=1, ls=":")
-    ax.text(flagged + 0.01, 0.05, f"served τ: inspect {flagged:.1%},\nfind {(p_served >= threshold)[yt == 1].mean():.1%} of thefts", fontsize=8, color=INK)
+    ax.text(flagged + 0.01, 0.05, f"{'served ' if in_service else ''}τ: inspect {flagged:.1%},\nfind {(p_served >= threshold)[yt == 1].mean():.1%} of thefts", fontsize=8, color=INK)
     ax.set(xlabel="Share of customers inspected (highest probability first)", ylabel="Share of thefts found", xlim=(0, 1), ylim=(0, 1.01),
            title="Inspection workload against thefts found, test customers")
     ax.legend(fontsize=7.5, loc="lower right")

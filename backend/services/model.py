@@ -1,8 +1,12 @@
 """The served model in operations: scores, thresholds, explanations.
 
 Nothing here reads a label. Scores are Platt-calibrated probabilities (fitted on
-validation customers, frozen in artifacts/pipeline.json); SHAP explains the model's
-raw score in log-odds, of which the calibrated probability is a monotone rescaling.
+validation customers, frozen in artifacts/pipeline.json). A single-model pipeline is
+explained by SHAP on its raw score (log-odds), of which the calibrated probability is a
+monotone rescaling. The hybrid pipeline blends two calibrated parts, XGBoost on the
+engineered features and the sequence model (a CNN on the daily readings, served as ONNX),
+and recalibrates the blend; SHAP explains the XGBoost part, and the sequence part is
+explained week by week (``sequence_explanation``).
 The threshold studio's precision and recall come from the saved validation
 predictions, the customers thresholds are chosen on, never the test set.
 """
@@ -16,6 +20,7 @@ import numpy as np
 import pandas as pd
 import shap
 
+from src import sequence
 from src.calibration import apply_platt
 from src.feature_catalog import feature_label, format_feature_value
 from src.modeling import load_model
@@ -24,7 +29,9 @@ from src.publish import verify_manifest
 from . import data as data_service
 from . import db
 from .config import BASE_DIR, get_paths
-from .data import ModelUnavailable, active_population, finite_or_none, get_feature_matrix, get_pipeline_spec, series_calendar
+from .data import (
+    ModelUnavailable, active_population, finite_or_none, get_feature_matrix, get_pipeline_spec, get_wide_data, series_calendar,
+)
 from .errors import NotFoundError
 
 # Calibrated probabilities at or above this are "high" risk (theft more likely than not); between
@@ -33,7 +40,12 @@ HIGH_RISK_PROBABILITY = 0.5
 
 
 class FeatureInputError(ValueError):
-    """Feature rows do not carry every feature the model was trained on."""
+    """Feature rows do not carry every feature the model was trained on, or the model needs the readings."""
+
+
+NEEDS_READINGS = ("The model in service (the hybrid) also reads each customer's daily readings, so rows of "
+                  "features alone cannot be scored. Upload SGCC meter data, or score a customer of the population by id.")
+SEQUENCE = "wide_deep_cnn"
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +62,25 @@ def integrity_problems() -> List[str]:
     names = list(load_model(str(get_paths()["model_file"])).get_booster().feature_names or [])
     if names != list(spec["features"]):
         problems.append("The model's features differ from the feature list in artifacts/pipeline.json")
+    if is_hybrid():
+        try:
+            sequence.OnnxNetwork(BASE_DIR / spec["components"][SEQUENCE]["file"])
+        except Exception as exc:  # noqa: BLE001 - any failure to load disables scoring
+            problems.append(f"The sequence model cannot be loaded: {exc}")
     return problems
+
+
+def is_hybrid() -> bool:
+    """Whether the served pipeline blends XGBoost with the sequence model."""
+    return "components" in get_pipeline_spec()
+
+
+@lru_cache(maxsize=1)
+def get_sequence_network() -> sequence.OnnxNetwork:
+    problems = integrity_problems()
+    if problems:
+        raise ModelUnavailable("Scoring is disabled: " + "; ".join(problems))
+    return sequence.OnnxNetwork(BASE_DIR / get_pipeline_spec()["components"][SEQUENCE]["file"])
 
 
 @lru_cache(maxsize=1)
@@ -102,28 +132,78 @@ def _aligned(features: pd.DataFrame) -> pd.DataFrame:
 
 
 def raw_scores(features: pd.DataFrame) -> np.ndarray:
-    """The model's own output (what SHAP explains)."""
+    """The XGBoost model's own output (what SHAP explains)."""
     return np.asarray(get_trained_model().predict_proba(_aligned(features))[:, 1], dtype=float)
 
 
-def calibrate(raw: np.ndarray) -> np.ndarray:
-    return apply_platt(raw, get_pipeline_spec()["calibration"])
+def tree_probability(raw: np.ndarray) -> np.ndarray:
+    """Calibrated probability of the XGBoost model alone (the whole model when it is not a hybrid)."""
+    spec = get_pipeline_spec()
+    return apply_platt(raw, spec["components"]["xgboost"]["calibration"] if is_hybrid() else spec["calibration"])
 
 
-def predict_proba(features: pd.DataFrame) -> np.ndarray:
-    """Calibrated theft probabilities for rows of model features; non-numeric values count as missing."""
-    return calibrate(raw_scores(features))
+def sequence_probability(wide: pd.DataFrame) -> tuple:
+    """(raw score, calibrated probability) of the sequence model for customers' daily readings."""
+    part = get_pipeline_spec()["components"][SEQUENCE]
+    values, mask = sequence.prepare(wide, part.get("cleaning"))
+    raw = get_sequence_network().predict(values, mask)
+    return raw, apply_platt(raw, part["calibration"])
+
+
+def score(features: pd.DataFrame, wide: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Calibrated theft probability of each row, with its parts: ``tree`` (XGBoost) and, for the hybrid,
+    ``sequence``. The hybrid needs the customers' daily readings (``wide``, same index as ``features``).
+    """
+    raw = raw_scores(features)
+    tree = tree_probability(raw)
+    frame = pd.DataFrame({"raw_score": raw, "tree": tree}, index=features.index)
+    if not is_hybrid():
+        frame["probability"] = tree
+        return frame
+    if wide is None:
+        raise FeatureInputError(NEEDS_READINGS)
+    spec = get_pipeline_spec()
+    _, frame["sequence"] = sequence_probability(wide.loc[features.index])
+    weight = float(spec["blend"]["weight_sequence"])
+    frame["probability"] = apply_platt(weight * frame["sequence"].to_numpy() + (1 - weight) * tree, spec["calibration"])
+    return frame
+
+
+def predict_proba(features: pd.DataFrame, wide: Optional[pd.DataFrame] = None) -> np.ndarray:
+    """Calibrated theft probabilities; non-numeric feature values count as missing."""
+    return score(features, wide)["probability"].to_numpy(dtype=float)
+
+
+def blend_parts(scored: pd.Series) -> Optional[List[Dict[str, Any]]]:
+    """The hybrid's two parts for one scored customer: label, calibrated probability and weight."""
+    if not is_hybrid():
+        return None
+    spec = get_pipeline_spec()
+    weight = float(spec["blend"]["weight_sequence"])
+    parts = spec["components"]
+    return [
+        {"name": "xgboost", "label": parts["xgboost"]["label"], "probability": float(scored["tree"]), "weight": 1 - weight},
+        {"name": SEQUENCE, "label": parts[SEQUENCE]["label"], "probability": float(scored["sequence"]), "weight": weight},
+    ]
 
 
 @lru_cache(maxsize=2)
-def _population_probabilities(population_id: str) -> pd.Series:
+def _population_scores(population_id: str) -> pd.DataFrame:
     X = get_feature_matrix()
-    return pd.Series(predict_proba(X), index=X.index.astype(str)).sort_values(ascending=False, kind="mergesort")
+    frame = score(X, get_wide_data() if is_hybrid() else None)
+    frame.index = frame.index.astype(str)
+    return frame.sort_values("probability", ascending=False, kind="mergesort")
+
+
+def get_population_scores() -> pd.DataFrame:
+    """Each customer's calibrated probability (and the hybrid's parts), highest first."""
+    return _population_scores(active_population()["id"])
 
 
 def get_population_probabilities() -> pd.Series:
     """Calibrated theft probability of every customer in the operational population, highest first."""
-    return _population_probabilities(active_population()["id"])
+    return get_population_scores()["probability"]
 
 
 def get_model_metrics() -> Dict[str, Any]:
@@ -279,34 +359,74 @@ def _customer_features(customer_id: str) -> pd.DataFrame:
 
 
 def explain_customer(customer_id: str) -> Dict[str, Any]:
-    """Every feature's SHAP contribution to the raw score (log-odds): base + sum = logit(raw score)."""
+    """
+    Every feature's SHAP contribution to the XGBoost raw score (log-odds): base + sum = logit(raw
+    score). ``probability`` is the served (for the hybrid: blended) probability, ``parts`` its parts.
+    """
     features = _customer_features(customer_id)
-    raw = raw_scores(features)
+    scored = get_population_scores().loc[customer_id]
     return {
         "customer_id": customer_id,
-        "probability": float(calibrate(raw)[0]),
-        "raw_score": float(raw[0]),
+        "probability": float(scored["probability"]),
+        "raw_score": float(scored["raw_score"]),
+        "tree_probability": float(scored["tree"]),
         "base_value": _base_value(),
         "contributions": _reasons(features.iloc[0], _shap_matrix(features)[0]),
+        "parts": blend_parts(scored),
     }
 
 
-def _prediction(features: pd.DataFrame, threshold: Optional[float]) -> Dict[str, Any]:
+def sequence_explanation(customer_id: str) -> Dict[str, Any]:
+    """
+    Which weeks of the customer's readings raised the sequence model's score: for each week, the raw
+    score minus the score with that week replaced by the customer's typical day (src.sequence).
+    """
+    if not is_hybrid():
+        return {"customer_id": customer_id, "available": False, "weeks": []}
+    wide = get_wide_data()
+    if customer_id not in wide.index:
+        raise NotFoundError(f"Unknown customer_id: {customer_id}")
+    part = get_pipeline_spec()["components"][SEQUENCE]
+    row = wide.loc[[customer_id]]
+    values, mask = sequence.prepare(row, part.get("cleaning"))
+    effects = sequence.week_effects(get_sequence_network(), values[0], mask[0])
+    days = sequence.day_index(row.shape[1])
+    dates = pd.DatetimeIndex(row.columns) if isinstance(row.columns, pd.DatetimeIndex) else None
+    weeks = []
+    for item in effects:
+        positions = [int(d) for d in days[item["week"] * 7:(item["week"] + 1) * 7] if d >= 0]
+        if not positions:
+            continue
+        weeks.append({
+            "week": item["week"], "effect": item["effect"],
+            "start": dates[positions[0]].strftime("%Y-%m-%d") if dates is not None else None,
+            "end": dates[positions[-1]].strftime("%Y-%m-%d") if dates is not None else None,
+        })
+    scored = get_population_scores().loc[customer_id]
+    return {"customer_id": customer_id, "available": True, "label": part["label"],
+            "probability": float(scored["sequence"]), "raw_score": float(sequence_probability(row)[0][0]),
+            "weight": float(get_pipeline_spec()["blend"]["weight_sequence"]), "weeks": weeks}
+
+
+def _prediction(features: pd.DataFrame, threshold: Optional[float], wide: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     threshold = get_decision_threshold() if threshold is None else threshold
-    raw = raw_scores(features)
-    probability = float(calibrate(raw)[0])
+    scored = score(features, wide).iloc[0]
+    probability = float(scored["probability"])
     return {
         "probability": probability,
-        "raw_score": float(raw[0]),
+        "raw_score": float(scored["raw_score"]),
         "prediction": int(probability >= threshold),
         "threshold": threshold,
         "risk_tier": risk_tier(probability, threshold),
         "reasons": _reasons(features.iloc[0], _shap_matrix(features)[0], top_n=3),
+        "parts": blend_parts(scored),
     }
 
 
 def predict_customer(customer_id: str, threshold: Optional[float] = None) -> Dict[str, Any]:
-    return {"customer_id": customer_id, **_prediction(_customer_features(customer_id), threshold)}
+    features = _customer_features(customer_id)
+    wide = get_wide_data().loc[[customer_id]] if is_hybrid() else None
+    return {"customer_id": customer_id, **_prediction(features, threshold, wide)}
 
 
 def require_features(columns) -> None:
@@ -318,6 +438,8 @@ def require_features(columns) -> None:
 
 
 def predict_features(features: Dict[str, Optional[float]], threshold: Optional[float] = None) -> Dict[str, Any]:
+    if is_hybrid():
+        raise FeatureInputError(NEEDS_READINGS)
     require_features(features)
     names = get_feature_names()
     frame = pd.DataFrame([[features[name] for name in names]], columns=names, dtype=float)
@@ -435,7 +557,7 @@ def explanation_check(customer_id: str) -> Dict[str, Any]:
 
 
 _CACHED = (
-    integrity_problems, get_trained_model, _population_probabilities, _validation_arrays, get_shap_explainer,
+    integrity_problems, get_trained_model, get_sequence_network, _population_scores, _validation_arrays, get_shap_explainer,
     _flagged_drivers, _global_drivers, _lime_explainer, _explanation_check, *data_service.CACHED,
 )
 

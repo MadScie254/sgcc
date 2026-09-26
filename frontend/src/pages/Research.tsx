@@ -17,6 +17,8 @@ const PIPELINE_COLORS: Record<string, string> = {
   xgboost_default: "#1baf7a",
   random_forest_smote: "#eda100",
   logistic_regression_smote: "#e87ba4",
+  wide_deep_cnn: "#6b6a66",
+  hybrid: "#0f766e",
 };
 
 const SCORE_COLUMNS = [

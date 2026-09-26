@@ -42,6 +42,7 @@ ENV/
 # Model artifacts (only the served model and baseline summary are committed)
 models/**
 !models/xgb_best.ubj
+!models/sequence.onnx
 !models/baselines/
 !models/baselines/comparison_results.json
 
@@ -71,6 +72,8 @@ artifacts/**
 !artifacts/literature_metrics.json
 !artifacts/history_length.json
 !artifacts/deep_baseline.json
+!artifacts/hybrid_study.json
+!artifacts/sequence.json
 !artifacts/predictions/extensions_validation.csv.gz
 !artifacts/predictions/extensions_test.csv.gz
 

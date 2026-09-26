@@ -220,10 +220,21 @@ def _case(generated: str, customer_id: str) -> tuple:
     pdf.monthly_chart([(key, sum(v) / len(v) if v else None) for key, v in months.items()])
 
     pdf.heading("Why the model scored this customer")
-    pdf.paragraph("SHAP contributions to the model's raw score, in log-odds: positive values push towards theft, "
-                  f"negative away from it. From the base value ({explanation['base_value']:+.2f}) they add up to the raw "
-                  f"score {explanation['raw_score']:.3f}, which calibration maps to the probability "
-                  f"{explanation['probability']:.3f} without changing the ranking.")
+    parts = explanation.get("parts")
+    if parts:
+        pdf.paragraph("The model in service is a hybrid: " + " and ".join(
+            f"{p['label']} ({p['probability']:.3f}, weight {p['weight']:.2f})" for p in parts)
+            + f", blended and recalibrated to the probability {explanation['probability']:.3f}. The signals below "
+            "explain the XGBoost part; the console's case page also shows which weeks of readings raised the "
+            "sequence model's score.")
+        pdf.paragraph("SHAP contributions to the XGBoost part's raw score, in log-odds: positive values push towards "
+                      f"theft, negative away from it. From the base value ({explanation['base_value']:+.2f}) they add up "
+                      f"to its raw score {explanation['raw_score']:.3f} (calibrated: {explanation['tree_probability']:.3f}).")
+    else:
+        pdf.paragraph("SHAP contributions to the model's raw score, in log-odds: positive values push towards theft, "
+                      f"negative away from it. From the base value ({explanation['base_value']:+.2f}) they add up to the raw "
+                      f"score {explanation['raw_score']:.3f}, which calibration maps to the probability "
+                      f"{explanation['probability']:.3f} without changing the ranking.")
     pdf.grid(["Signal", "Value", "Contribution"],
              [[c["label"], c["display_value"], f"{c['shap_value']:+.3f}"] for c in explanation["contributions"][:10]],
              widths=[82, 62, 34], align=["LEFT", "LEFT", "RIGHT"])

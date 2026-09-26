@@ -202,7 +202,7 @@ interface ComparisonRow {
   model: string;
   label: string;
   served: boolean;
-  preprocessing: "raw" | "clean";
+  preprocessing: string; // "raw", "clean" or, for the hybrid, "raw+sequence"
   treatment: "none" | "smote" | "smote_enn";
   threshold: number;
   auc: number;
@@ -316,12 +316,31 @@ interface TimeSeries {
   points: Reading[];
 }
 
+export interface ModelPart {
+  name: string;
+  label: string;
+  probability: number;
+  weight: number;
+}
+
 interface Explanation {
   customer_id: string;
   probability: number;
   raw_score: number;
+  tree_probability?: number | null;
   base_value: number;
   contributions: Reason[];
+  parts?: ModelPart[] | null;
+}
+
+export interface SequenceExplanation {
+  customer_id: string;
+  available: boolean;
+  label?: string | null;
+  probability?: number | null;
+  raw_score?: number | null;
+  weight?: number | null;
+  weeks: Array<{ week: number; start: string | null; end: string | null; effect: number }>;
 }
 
 interface ExplanationCheck {
@@ -479,6 +498,8 @@ export const getResamplingEffect = () => get<ResamplingEffect>("/research/resamp
 
 export const getTimeseries = (customerId: string) => get<TimeSeries>(`/customers/${encodeURIComponent(customerId)}/timeseries`);
 export const getExplanation = (customerId: string) => get<Explanation>(`/customers/${encodeURIComponent(customerId)}/explanation`);
+export const getSequenceExplanation = (customerId: string) =>
+  get<SequenceExplanation>(`/customers/${encodeURIComponent(customerId)}/sequence-explanation`);
 export const getExplanationCheck = (customerId: string) =>
   get<ExplanationCheck>(`/customers/${encodeURIComponent(customerId)}/explanation-check`);
 

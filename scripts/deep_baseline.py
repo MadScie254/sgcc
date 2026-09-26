@@ -50,104 +50,34 @@ from src.calibration import apply_platt, fit_platt  # noqa: E402
 from src.eval import classification_metrics  # noqa: E402
 from src.figstyle import INK2, MUTED, PIPELINE_COLORS, plt  # noqa: E402
 from src.modeling import select_threshold  # noqa: E402
-from src.preprocessing import clean_series  # noqa: E402
 from src.stats import paired_comparison  # noqa: E402
 from src.study import load_study, save_extension_predictions  # noqa: E402
 
 NAME, LABEL = "wide_deep_cnn", "Wide & Deep CNN (Zheng et al., 2018)"
 OUT = ROOT / "artifacts" / "deep_baseline.json"
-DAYS, WEEKS = 1036, 148
 METRICS = ("pr_auc", "auc", "recall", "precision", "f1", "mcc", "gmean")
+
+from src.sequence import DAYS, build_network, predict_network, prepare, train_network  # noqa: E402,F401
 
 try:
     import torch
-    from torch import nn
 except ImportError:  # pragma: no cover - optional dependency
     torch = None
-    nn = None
 
 
-def prepare(wide: pd.DataFrame, cleaning: dict) -> tuple:
-    """(values, missing mask) as float32 arrays of shape (customers, 1036)."""
-    cleaned, _ = clean_series(wide, cleaning)
-    values = cleaned.to_numpy(dtype=np.float32)
-    values = np.nan_to_num(values, nan=0.0)
-    low, high = values.min(axis=1, keepdims=True), values.max(axis=1, keepdims=True)
-    values = np.divide(values - low, high - low, out=np.zeros_like(values), where=(high - low) > 0)
-    mask = wide.isna().to_numpy(dtype=np.float32)
-    pad = DAYS - values.shape[1]
-    values = np.pad(values, ((0, 0), (0, pad)))
-    mask = np.pad(mask, ((0, 0), (0, pad)), constant_values=1.0)
-    return values, mask
-
-
-if nn is not None:
-    class WideDeep(nn.Module):
-        def __init__(self, filters: int = 15, hidden: int = 60):
-            super().__init__()
-            self.wide = nn.Sequential(nn.Linear(DAYS, hidden), nn.ReLU())
-            self.deep = nn.Sequential(
-                nn.Conv2d(2, filters, 3, padding=1), nn.ReLU(),
-                nn.Conv2d(filters, filters, 3, padding=1), nn.ReLU(),
-                nn.MaxPool2d((2, 1)),
-                nn.Conv2d(filters, filters, 3, padding=1), nn.ReLU(),
-                nn.MaxPool2d((2, 1)),
-                nn.Flatten(), nn.Linear(filters * (WEEKS // 4) * 7, hidden), nn.ReLU(), nn.Dropout(0.2),
-            )
-            self.head = nn.Linear(2 * hidden, 1)
-
-        def forward(self, values, mask):
-            image = torch.stack([values, mask], dim=1).view(-1, 2, WEEKS, 7)
-            return self.head(torch.cat([self.wide(values), self.deep(image)], dim=1)).squeeze(1)
+def WideDeep(filters: int = 15, hidden: int = 60):  # noqa: N802 - kept for the tests' and scripts' use
+    return build_network(filters, hidden)
 
 
 def predict(model, values, mask, device, batch: int = 2048) -> np.ndarray:
-    model.eval()
-    out = []
-    with torch.no_grad():
-        for i in range(0, len(values), batch):
-            v = torch.from_numpy(values[i:i + batch]).to(device)
-            m = torch.from_numpy(mask[i:i + batch]).to(device)
-            out.append(torch.sigmoid(model(v, m)).cpu().numpy())
-    return np.concatenate(out)
+    return predict_network(model, values, mask, device, batch)
 
 
 def train(values, mask, y, val_values, val_mask, y_val, device: str, seed: int = 42, max_epochs: int = 60,
           patience: int = 6, batch: int = 256):
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    model = WideDeep().to(device)
-    optimiser = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
-    ratio = float((y == 0).sum() / max((y == 1).sum(), 1))
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(ratio, device=device))
-    rng = np.random.default_rng(seed)
-    best, best_state, history, waited = -1.0, None, [], 0
-    for epoch in range(1, max_epochs + 1):
-        model.train()
-        order = rng.permutation(len(y))
-        total = 0.0
-        for i in range(0, len(order), batch):
-            idx = order[i:i + batch]
-            v = torch.from_numpy(values[idx]).to(device)
-            m = torch.from_numpy(mask[idx]).to(device)
-            target = torch.from_numpy(y[idx].astype(np.float32)).to(device)
-            optimiser.zero_grad()
-            loss = loss_fn(model(v, m), target)
-            loss.backward()
-            optimiser.step()
-            total += loss.item() * len(idx)
-        score = float(average_precision_score(y_val, predict(model, val_values, val_mask, device)))
-        history.append({"epoch": epoch, "train_loss": total / len(y), "validation_pr_auc": score})
-        print(f"epoch {epoch}: loss {total / len(y):.4f}, validation PR-AUC {score:.4f}", flush=True)
-        if score > best:
-            best, waited = score, 0
-            best_state = {k: t.detach().clone() for k, t in model.state_dict().items()}
-        else:
-            waited += 1
-            if waited >= patience:
-                break
-    model.load_state_dict(best_state)
-    return model, history
+    return train_network(values, mask, y, val_values, val_mask, y_val, device, seed,
+                         {"max_epochs": max_epochs, "patience": patience, "batch_size": batch},
+                         log=lambda line: print(line, flush=True))
 
 
 def main() -> None:

@@ -290,8 +290,35 @@ def test_explanation_adds_up_to_the_raw_score(client, top_customer):
     assert len(body["contributions"]) == 87
     logit = body["base_value"] + sum(c["shap_value"] for c in body["contributions"])
     assert 1 / (1 + math.exp(-logit)) == pytest.approx(body["raw_score"], abs=1e-4)
-    assert body["probability"] == pytest.approx(float(apply_platt([body["raw_score"]], get_pipeline_spec()["calibration"])[0]))
+    spec = get_pipeline_spec()
+    listed = client.get("/api/customers", params={"page_size": 1}).json()["items"][0]
+    assert body["probability"] == pytest.approx(listed["risk_score"])
     assert all(c["label"] and c["display_value"] for c in body["contributions"])
+    if not model_service.is_hybrid():
+        assert body["probability"] == pytest.approx(float(apply_platt([body["raw_score"]], spec["calibration"])[0]))
+        assert body["parts"] is None
+        return
+    # The hybrid: SHAP explains the XGBoost part; the served probability is the recalibrated blend of the parts.
+    tree = float(apply_platt([body["raw_score"]], spec["components"]["xgboost"]["calibration"])[0])
+    assert body["tree_probability"] == pytest.approx(tree)
+    parts = {p["name"]: p for p in body["parts"]}
+    assert parts["xgboost"]["probability"] == pytest.approx(tree)
+    assert parts["xgboost"]["weight"] + parts["wide_deep_cnn"]["weight"] == pytest.approx(1.0)
+    blend = sum(p["probability"] * p["weight"] for p in body["parts"])
+    assert body["probability"] == pytest.approx(float(apply_platt([blend], spec["calibration"])[0]))
+
+
+def test_sequence_explanation(client, top_customer):
+    body = client.get(f"/api/customers/{top_customer}/sequence-explanation").json()
+    if not model_service.is_hybrid():
+        assert body == {"customer_id": top_customer, "available": False, "weeks": [], "label": None,
+                        "probability": None, "raw_score": None, "weight": None}
+        return
+    assert body["available"] and len(body["weeks"]) == 148
+    assert body["weeks"][0]["start"] == "2014-01-01" and body["weeks"][-1]["end"] == "2016-10-31"
+    assert all(math.isfinite(w["effect"]) for w in body["weeks"])
+    assert 0 < body["weight"] < 1 and 0 <= body["probability"] <= 1
+    assert client.get("/api/customers/nope/sequence-explanation").status_code == 404
 
 
 def test_explanation_consistency(client, top_customer):
@@ -311,12 +338,17 @@ def test_predict_single(client, top_customer):
 
     row = get_feature_matrix().loc[top_customer]
     features = {k: (None if pd.isna(v) else float(v)) for k, v in row.items()}
-    by_features = client.post("/api/predict/single", json={"features": features, "threshold": 0.3}).json()
-    assert by_features["probability"] == pytest.approx(by_id["probability"], abs=1e-6)
-    assert by_features["threshold"] == 0.3 and by_features["customer_id"] is None
-
+    by_features = client.post("/api/predict/single", json={"features": features, "threshold": 0.3})
     partial = client.post("/api/predict/single", json={"features": {"missing_ratio": 0.4}})
-    assert partial.status_code == 400 and "86 of the 87 model features are missing" in partial.json()["detail"]
+    if model_service.is_hybrid():
+        # The hybrid also reads the daily readings: features alone are refused, never scored by half the model.
+        assert by_id["parts"] and len(by_id["parts"]) == 2
+        for response in (by_features, partial):
+            assert response.status_code == 400 and "daily readings" in response.json()["detail"]
+    else:
+        assert by_features.json()["probability"] == pytest.approx(by_id["probability"], abs=1e-6)
+        assert by_features.json()["threshold"] == 0.3 and by_features.json()["customer_id"] is None
+        assert partial.status_code == 400 and "86 of the 87 model features are missing" in partial.json()["detail"]
     assert client.post("/api/predict/single", json={}).status_code == 400
     assert client.post("/api/predict/single", json={"customer_id": "nope"}).status_code == 404
 
@@ -329,9 +361,17 @@ def test_batch_scores_meter_data_and_features(client):
     assert list(scored.columns) == ["customer_id", "probability", "prediction", "risk_tier"]
     assert len(scored) == 20
 
-    # The same customers as feature rows must score identically.
+    # Meter data scores exactly as the same customers do in the population.
     ids = rows["CONS_NO"].astype(str).tolist()
+    served = model_service.get_population_probabilities()
+    assert (scored.set_index(scored["customer_id"].astype(str))["probability"] - served.loc[ids]).abs().max() < 1e-5
+
     features = get_feature_matrix().loc[ids].reset_index()
+    if model_service.is_hybrid():
+        refused = client.post("/api/predict/batch", files={"file": ("features.csv", csv_bytes(features), "text/csv")})
+        assert refused.status_code == 400 and "daily readings" in refused.json()["detail"]
+        return
+    # The same customers as feature rows must score identically.
     by_features = pd.read_csv(io.StringIO(client.post(
         "/api/predict/batch", files={"file": ("features.csv", csv_bytes(features), "text/csv")}).text))
     merged = scored.merge(by_features, on="customer_id", suffixes=("_meter", "_features"))
@@ -453,8 +493,11 @@ def test_promote_upload_to_population(client, named_keys):
     assert reset["source"] == "sample"
     assert client.get("/api/model/metrics", headers=ANALYST).json()["customers_monitored"] == 3000
     features = client.post("/api/datasets", files={"file": ("f.csv", csv_bytes(get_feature_matrix().head(5).reset_index()), "text/csv")},
-                           headers=ANALYST).json()
-    assert client.post("/api/population", json={"dataset_id": features["dataset_id"]}, headers=SUPERVISOR).status_code == 400
+                           headers=ANALYST)
+    if model_service.is_hybrid():
+        assert features.status_code == 400 and "daily readings" in features.json()["detail"]
+    else:
+        assert client.post("/api/population", json={"dataset_id": features.json()["dataset_id"]}, headers=SUPERVISOR).status_code == 400
 
 
 def test_delete_and_retention(client, named_keys, monkeypatch):

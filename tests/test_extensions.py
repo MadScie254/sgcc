@@ -91,7 +91,7 @@ def test_history_window_keeps_the_last_months():
 
 def test_wide_deep_cnn_scores_one_logit_per_customer():
     torch = pytest.importorskip("torch")
-    from deep_baseline import DAYS, WideDeep, prepare
+    from src.sequence import DAYS, build_network, prepare
 
     days = pd.date_range("2014-01-01", periods=1034, freq="D")
     wide = pd.DataFrame(np.random.default_rng(0).random((3, 1034)) * 5, columns=days)
@@ -99,5 +99,34 @@ def test_wide_deep_cnn_scores_one_logit_per_customer():
     values, mask = prepare(wide, None)
     assert values.shape == mask.shape == (3, DAYS)
     assert values.min() >= 0 and values.max() <= 1 and mask[0, 10:20].all() and mask[:, -2:].all()
-    out = WideDeep()(torch.from_numpy(values), torch.from_numpy(mask))
+    out = build_network()(torch.from_numpy(values), torch.from_numpy(mask))
     assert tuple(out.shape) == (3,)
+
+
+def test_day_index_maps_input_positions_to_days():
+    from src.sequence import DAYS, day_index
+
+    sgcc = day_index(1034)  # padded at the end to whole weeks
+    assert len(sgcc) == DAYS and sgcc[0] == 0 and sgcc[1033] == 1033 and (sgcc[-2:] == -1).all()
+    short = day_index(365)  # a shorter history is padded at the start
+    assert (short[:DAYS - 365] == -1).all() and short[-1] == 364
+    long = day_index(1200)  # a longer one keeps the most recent days
+    assert long[0] == 1200 - DAYS and long[-1] == 1199
+
+
+def test_sequence_model_exports_to_onnx_and_scores_the_same(tmp_path):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("onnxruntime")
+    from src.sequence import WEEKS, OnnxNetwork, build_network, export_onnx, predict_network, prepare, week_effects
+
+    torch.manual_seed(0)
+    days = pd.date_range("2014-01-01", periods=1034, freq="D")
+    wide = pd.DataFrame(np.random.default_rng(1).random((4, 1034)) * 5, columns=days)
+    wide.iloc[1, 100:140] = np.nan
+    values, mask = prepare(wide, None)
+    network = build_network()
+    export_onnx(network, tmp_path / "sequence.onnx")
+    onnx = OnnxNetwork(tmp_path / "sequence.onnx")
+    assert np.abs(onnx.predict(values, mask) - predict_network(network, values, mask)).max() < 1e-5
+    effects = week_effects(onnx, values[1], mask[1])
+    assert len(effects) == WEEKS and all(np.isfinite(e["effect"]) for e in effects)

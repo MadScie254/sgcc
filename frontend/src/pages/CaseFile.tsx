@@ -3,12 +3,12 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, CheckCircle2, FileDown } from "lucide-react";
 import {
-  createAndDownloadReport, getCase, getExplanation, getExplanationCheck, getModelMetrics, getTimeseries, updateCase,
+  createAndDownloadReport, getCase, getExplanation, getExplanationCheck, getModelMetrics, getSequenceExplanation, getTimeseries, updateCase,
   type CaseDetail, type CaseStatus, type CaseUpdate, type Reading,
 } from "@/lib/api";
 import { fmtDateTime, fmtInt } from "@/lib/format";
 import { ApiError, Button, Card, CardHeader, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
-import { ConsumptionChart, Gauge, ShapWaterfall } from "@/components/charts";
+import { ConsumptionChart, Gauge, ShapWaterfall, WeekEffectsChart } from "@/components/charts";
 
 function seriesFacts(points: Reading[]) {
   const observed = points.filter((p): p is { date: string; kwh: number } => p.kwh !== null);
@@ -91,6 +91,9 @@ export function CaseFilePage() {
   const explanation = useQuery({ queryKey: ["explanation", customerId], queryFn: () => getExplanation(customerId), enabled: caseQuery.isSuccess });
   const series = useQuery({ queryKey: ["timeseries", customerId], queryFn: () => getTimeseries(customerId), enabled: caseQuery.isSuccess });
   const check = useQuery({ queryKey: ["explanation-check", customerId], queryFn: () => getExplanationCheck(customerId), enabled: explanation.isSuccess });
+  const parts = explanation.data?.parts ?? null;
+  const weeks = useQuery({ queryKey: ["sequence-explanation", customerId], queryFn: () => getSequenceExplanation(customerId),
+    enabled: explanation.isSuccess && Boolean(parts) });
   const [note, setNote] = useState("");
   const [pending, setPending] = useState<CaseStatus | null>(null);
 
@@ -178,6 +181,16 @@ export function CaseFilePage() {
           <span className="self-start text-[13px] text-ink-2">Theft probability</span>
           {c ? <Gauge value={c.risk_score} threshold={threshold} /> : <Skeleton className="h-[136px] w-[240px]" />}
           <span className="text-xs text-ink-3">{c ? `${c.flagged ? `Rank ${c.rank}` : "Below threshold"} · τ ${threshold.toFixed(3)}` : "…"}</span>
+          {parts ? (
+            <dl className="m-0 flex w-full flex-col gap-2 border-t border-line-soft pt-3 text-[13px]" aria-label="Parts of the hybrid model">
+              {parts.map((part) => (
+                <div key={part.name} className="flex justify-between gap-3">
+                  <dt className="text-ink-2">{part.name === "xgboost" ? "Features (XGBoost)" : "Daily readings (CNN)"}</dt>
+                  <dd className="m-0 font-mono">{part.probability.toFixed(3)} <span className="text-ink-3">× {part.weight.toFixed(2)}</span></dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
           <dl className="m-0 flex w-full flex-col gap-2 border-t border-line-soft pt-3 text-[13px]">
             {[
               ["First reading", facts?.first ?? "—"],
@@ -204,12 +217,33 @@ export function CaseFilePage() {
         A flag is a reason to inspect, not evidence of theft: conclusions rest on the field investigation, and a customer found honest is cleared.
       </p>
 
+      {parts ? (
+        <Card label="Weeks that raised the sequence model's score" className="flex flex-col gap-3.5 p-[22px]">
+          <CardHeader title="What the sequence model saw"
+            subtitle={`The CNN reads the daily readings directly (${Math.round((weeks.data?.weight ?? 0) * 100)}% of the blended score). Each bar is one week: how much the CNN's score would drop if that week looked like the customer's typical day.`} />
+          {weeks.data?.available ? (
+            <>
+              <WeekEffectsChart weeks={weeks.data.weeks} />
+              <p className="m-0 text-[13px] text-ink-2">
+                Weeks that raised it most: {weeks.data.weeks.slice().sort((a, b) => b.effect - a.effect).slice(0, 3)
+                  .filter((w) => w.effect > 0).map((w) => `${w.start} to ${w.end}`).join("; ") || "none stood out"}.
+              </p>
+            </>
+          ) : weeks.isError ? <ApiError title="Sequence explanation unavailable" error={weeks.error} /> : <Skeleton className="h-32" />}
+        </Card>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card label="Why the model flagged this customer" className="flex flex-col gap-4 p-[22px]">
-          <CardHeader title="Why it was flagged"
-            subtitle="SHAP contributions to the model's raw score, in log-odds: red pushes towards theft, blue away from it. Calibration then rescales the raw score to a probability without changing the ranking." />
+          <CardHeader title={parts ? "Why it was flagged: the features (XGBoost part)" : "Why it was flagged"}
+            subtitle={parts
+              ? "SHAP contributions to the XGBoost part's raw score, in log-odds: red pushes towards theft, blue away from it. Its calibrated probability is blended with the sequence model's."
+              : "SHAP contributions to the model's raw score, in log-odds: red pushes towards theft, blue away from it. Calibration then rescales the raw score to a probability without changing the ranking."} />
           {explanation.data ? (
-            <ShapWaterfall baseValue={explanation.data.base_value} rawScore={explanation.data.raw_score} probability={explanation.data.probability}
+            <ShapWaterfall baseValue={explanation.data.base_value} rawScore={explanation.data.raw_score}
+              probability={parts ? (explanation.data.tree_probability ?? explanation.data.probability) : explanation.data.probability}
+              probabilityLabel={parts ? "XGBoost part, calibrated" : undefined}
+              probabilityNote={parts ? `blended with the CNN to ${(explanation.data.probability * 100).toFixed(1)}%` : undefined}
               reasons={contributions.slice(0, 5)} featureCount={contributions.length} />
           ) : explanation.isError ? <ApiError error={explanation.error} /> : <Skeleton className="h-64" />}
           {check.data ? (

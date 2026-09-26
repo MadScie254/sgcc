@@ -49,6 +49,8 @@ defusedxml==0.7.1 ; python_full_version < '3.14'
     # via fpdf2
 fastapi==0.141.1 ; python_full_version < '3.14'
     # via sgcc-theft-detector (pyproject.toml)
+flatbuffers==25.12.19 ; python_full_version < '3.14'
+    # via onnxruntime
 fonttools==4.65.0 ; python_full_version < '3.14'
     # via
     #   fpdf2
@@ -124,6 +126,7 @@ numpy==2.3.5 ; python_full_version < '3.14'
     #   lime
     #   matplotlib
     #   numba
+    #   onnxruntime
     #   optuna
     #   pandas
     #   scikit-image
@@ -134,6 +137,8 @@ numpy==2.3.5 ; python_full_version < '3.14'
     #   xgboost
 nvidia-nccl-cu12==2.32.3 ; python_full_version < '3.14' and sys_platform == 'linux'
     # via xgboost
+onnxruntime==1.30.0 ; python_full_version < '3.14'
+    # via sgcc-theft-detector (pyproject.toml)
 optuna==4.6.0 ; python_full_version < '3.14'
     # via
     #   -c constraints.txt
@@ -142,6 +147,7 @@ packaging==26.3 ; python_full_version < '3.14'
     # via
     #   lazy-loader
     #   matplotlib
+    #   onnxruntime
     #   optuna
     #   pytest
     #   scikit-image
@@ -159,6 +165,8 @@ pillow==12.3.0 ; python_full_version < '3.14'
     #   scikit-image
 pluggy==1.6.0 ; python_full_version < '3.14'
     # via pytest
+protobuf==7.36.2 ; python_full_version < '3.14'
+    # via onnxruntime
 psycopg==3.3.6 ; python_full_version < '3.14'
     # via sgcc-theft-detector (pyproject.toml)
 psycopg-binary==3.3.6 ; python_full_version < '3.14' and implementation_name != 'pypy'

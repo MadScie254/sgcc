@@ -193,8 +193,9 @@ export function ConsumptionChart({ points, height = 240 }: { points: Reading[]; 
 
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 
-export function ShapWaterfall({ baseValue, rawScore, probability, reasons, featureCount }: {
+export function ShapWaterfall({ baseValue, rawScore, probability, reasons, featureCount, probabilityLabel, probabilityNote }: {
   baseValue: number; rawScore: number; probability: number; reasons: Reason[]; featureCount: number;
+  probabilityLabel?: string; probabilityNote?: string;
 }) {
   const output = Math.log(rawScore / (1 - rawScore));
   const shown = reasons.reduce((sum, r) => sum + r.shap_value, 0);
@@ -240,9 +241,47 @@ export function ShapWaterfall({ baseValue, rawScore, probability, reasons, featu
       <span className="border-t border-line-soft pt-2.5 font-semibold">Raw score</span>
       <span className="border-t border-line-soft pt-2.5 text-xs text-ink-3">log-odds {baseValue.toFixed(2)} → {output >= 0 ? "+" : ""}{output.toFixed(2)}</span>
       <span className="border-t border-line-soft pt-2.5 text-right font-mono font-semibold tabular">{fmtNum(rawScore)}</span>
-      <span className="font-semibold">Calibrated probability</span>
-      <span className="text-xs text-ink-3">same ranking, rescaled to observed theft rates</span>
+      <span className="font-semibold">{probabilityLabel ?? "Calibrated probability"}</span>
+      <span className="text-xs text-ink-3">{probabilityNote ?? "same ranking, rescaled to observed theft rates"}</span>
       <span className="text-right font-mono font-semibold tabular">{fmtPct(probability, 1)}</span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sequence model: effect of each week of readings
+// ---------------------------------------------------------------------------
+
+export interface WeekEffectPoint { week: number; start: string | null; end: string | null; effect: number }
+
+export function WeekEffectsChart({ weeks, height = 120 }: { weeks: WeekEffectPoint[]; height?: number }) {
+  const W = 720, T = 8, B = height - 22, mid = (T + B) / 2;
+  const peak = Math.max(...weeks.map((w) => Math.abs(w.effect)), 1e-6);
+  const step = W / Math.max(weeks.length, 1);
+  const y = (v: number) => (v / peak) * ((B - T) / 2);
+  const first = weeks.find((w) => w.start)?.start ?? "";
+  const last = [...weeks].reverse().find((w) => w.end)?.end ?? "";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <svg viewBox={`0 0 ${W} ${height - 14}`} className="h-auto w-full" role="img"
+        aria-label="Effect of each week of readings on the sequence model's score: bars above the line raised it, below lowered it">
+        <line x1={0} x2={W} y1={mid} y2={mid} stroke="#D6D4CE" />
+        {weeks.map((w, i) => {
+          const h = Math.abs(y(w.effect));
+          const up = w.effect >= 0;
+          return (
+            <rect key={w.week} x={i * step + 0.5} width={Math.max(step - 1, 1)} y={up ? mid - h : mid} height={Math.max(h, 0.5)}
+              fill={up ? RISK : COBALT} opacity={0.9}>
+              <title>{`${w.start ?? ""} to ${w.end ?? ""}: ${up ? "+" : "−"}${Math.abs(w.effect).toFixed(3)}`}</title>
+            </rect>
+          );
+        })}
+      </svg>
+      <div className="flex justify-between font-mono text-[11px] text-ink-3">
+        <span>{first}</span>
+        <span>red: raised the score · blue: lowered it</span>
+        <span>{last}</span>
+      </div>
     </div>
   );
 }

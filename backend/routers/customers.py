@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
-from backend.schemas import CustomerList, Explanation, ExplanationCheck, TimeSeries
+from backend.schemas import CustomerList, Explanation, ExplanationCheck, SequenceExplanation, TimeSeries
 from backend.services import model
 from backend.services.data import get_customer_timeseries
 
@@ -30,6 +30,12 @@ def timeseries(customer_id: str):
 @router.get("/{customer_id}/explanation", response_model=Explanation)
 def explanation(customer_id: str):
     return model.explain_customer(customer_id)
+
+
+@router.get("/{customer_id}/sequence-explanation", response_model=SequenceExplanation)
+async def sequence_explanation(customer_id: str):
+    """For the hybrid: which weeks of the daily readings raised the sequence model's score."""
+    return await run_in_threadpool(model.sequence_explanation, customer_id)
 
 
 @router.get("/{customer_id}/explanation-check", response_model=ExplanationCheck)

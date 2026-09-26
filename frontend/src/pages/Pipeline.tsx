@@ -21,7 +21,8 @@ const TRAINING_ABOUT: Record<string, string> = {
   Split: "Customers split 70 / 15 / 15 into training, validation and test, stratified by label.",
   Resample: "Objective 1: measures class counts, separability and boundary noise before and after SMOTE and SMOTE+ENN on the training customers.",
   Tune: "Optuna searches the hyperparameters of both XGBoost pipelines on the mean PR-AUC of 5 cross-validation folds, each scored separately; SMOTE+ENN is redone inside every fold.",
-  Validate: "Fits all five pipelines (tuned XGBoost with early stopping), calibrates each on validation (Platt scaling), picks each one's F1-maximising threshold on the calibrated validation probabilities, and serves the XGBoost pipeline with the higher validation PR-AUC.",
+  Validate: "Fits all five pipelines (tuned XGBoost with early stopping), calibrates each on validation (Platt scaling), picks each one's F1-maximising threshold on the calibrated validation probabilities, and keeps the two tuned XGBoost pipelines as candidates for service.",
+  Sequence: "With PyTorch installed: trains the Wide & Deep CNN on the daily readings (early stopping on validation PR-AUC), calibrates it, and blends it with standard XGBoost; the blend weight, its calibration and its threshold are chosen on validation customers. The hybrid is served when its validation PR-AUC is highest; the CNN is exported to ONNX.",
   Evaluate: "Scores every pipeline once on the untouched test customers: effectiveness, calibration, training time, inference time and model size. The predictions are saved for the significance tests.",
   Publish: "Stages the model, its frozen pipeline spec, all results and an unlabelled population sample, moves them into place, and writes a SHA-256 manifest last; the API refuses to score if any file changes.",
 };

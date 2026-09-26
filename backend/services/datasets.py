@@ -34,7 +34,9 @@ from . import db
 from .blobstore import get_blobstore
 from .data import active_population, build_model_input
 from .errors import NotFoundError
-from .model import FeatureInputError, get_decision_threshold, get_feature_names, predict_proba, require_features, risk_tier
+from .model import (
+    NEEDS_READINGS, FeatureInputError, get_decision_threshold, get_feature_names, is_hybrid, predict_proba, require_features, risk_tier,
+)
 
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
 MAX_ROWS = 200_000
@@ -107,7 +109,7 @@ def score_frame(frame: pd.DataFrame) -> ScoredDataset:
         features = build_model_input(wide)
         return ScoredDataset(
             format="consumption", customer_ids=list(features.index.astype(str)),
-            probabilities=predict_proba(features),
+            probabilities=predict_proba(features, wide),
             labels=None if labels is None else labels.reindex(features.index).to_numpy(),
             days=int(wide.shape[1]), features_found=len(get_feature_names()),
         )
@@ -118,6 +120,8 @@ def score_frame(frame: pd.DataFrame) -> ScoredDataset:
             "column and one column per date, written year first) or model features (one column per "
             f"feature, all {len(get_feature_names())} of them)."
         )
+    if is_hybrid():
+        raise DatasetError(NEEDS_READINGS)
     try:
         require_features(frame.columns)
     except FeatureInputError as exc:

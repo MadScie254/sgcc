@@ -17,6 +17,8 @@ dependencies = [
     "shap>=0.45",
     "imbalanced-learn>=0.12",
     "lime>=0.2.0.1",
+    # Serving the sequence model (exported by training to ONNX; training it needs requirements-research.txt)
+    "onnxruntime>=1.18",
     # API
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

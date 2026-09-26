@@ -73,7 +73,9 @@ def main() -> int:
     check("calibration", calibration["platt"]["ece"] < calibration["raw"]["ece"],
           f"test ECE {calibration['raw']['ece']:.4f} raw → {calibration['platt']['ece']:.4f} calibrated")
     rows = api.call("GET", "/research/comparison")
-    check("significance record", all(r["pr_auc_ci"] for r in rows),
+    # The significance tests cover the five pipelines of the study (not the sequence model or the hybrid).
+    study_rows = [r for r in rows if r["model"] not in ("wide_deep_cnn", "hybrid")]
+    check("significance record", len(study_rows) == 5 and all(r["pr_auc_ci"] for r in study_rows),
           ", ".join(f"{r['model']} {r['pr_auc']:.3f} [{r['pr_auc_ci'][0]:.3f}, {r['pr_auc_ci'][1]:.3f}]" for r in rows if r["pr_auc_ci"]))
 
     metrics = api.call("GET", "/model/metrics")
@@ -94,6 +96,13 @@ def main() -> int:
         worst_shap = max(worst_shap, abs(1 / (1 + math.exp(-logit)) - local["raw_score"]))
     check("endpoint consistency", worst_gap < 1e-6, f"max score difference across endpoints {worst_gap:.2e} over {len(ranked[:args.sample])} customers")
     check("SHAP additivity", worst_shap < 1e-3, f"max |sigmoid(base + Σ shap) − raw score| = {worst_shap:.2e}")
+
+    weeks = api.call("GET", f"/customers/{ranked[0]['customer_id']}/sequence-explanation")
+    if metrics.get("pipeline") == "hybrid":
+        parts = api.call("GET", f"/customers/{ranked[0]['customer_id']}/explanation")["parts"] or []
+        check("hybrid explanation", weeks["available"] and len(weeks["weeks"]) == 148 and len(parts) == 2,
+              "parts " + ", ".join(f"{p['name']} {p['probability']:.3f}×{p['weight']:.2f}" for p in parts) + "; "
+              f"{len(weeks['weeks'])} weeks explained for the sequence model")
 
     consistency = api.call("GET", f"/customers/{ranked[0]['customer_id']}/explanation-check")
     check("explanation consistency (LIME)", len(consistency["lime"]) == consistency["top_n"], consistency["message"])

@@ -60,6 +60,18 @@ model:
       none: {low: 1.0, high: 10.72}
       smote_enn: {low: 1.0, high: 3.0}
 
+  # The hybrid: a Wide & Deep CNN on the daily readings (src/sequence.py, needs PyTorch to train)
+  # blended with standard XGBoost; served through ONNX (onnxruntime), so the API needs no PyTorch.
+  sequence_file: "models/sequence.onnx"
+  hybrid:
+    enabled: true                 # skipped automatically when PyTorch is not installed
+    weight_step: 0.05             # grid for the CNN's weight in the blend, chosen on validation PR-AUC
+    sequence:                     # training settings (src.sequence.TRAINING_DEFAULTS)
+      max_epochs: 60
+      patience: 6
+      batch_size: 256
+      learning_rate: 0.001
+
   quick_train:
     sample_fraction: 0.25
     n_trials: 5
