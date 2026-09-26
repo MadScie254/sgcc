@@ -3,6 +3,7 @@ Deep-learning baseline: a Wide & Deep CNN in the style of Zheng et al. (2018), o
 
     pip install -r requirements-research.txt     # PyTorch (optional; not needed by the app)
     python scripts/deep_baseline.py              # ~15-30 min on 4 CPU cores; --device cuda on a GPU
+    python scripts/deep_baseline.py --splits     # the five other splits of robustness.py (~20 min)
     python scripts/deep_baseline.py --plot-only
 
 Zheng et al. released the SGCC data with a model that reads the daily series directly:
@@ -56,6 +57,7 @@ from src.study import load_study, save_extension_predictions  # noqa: E402
 NAME, LABEL = "wide_deep_cnn", "Wide & Deep CNN (Zheng et al., 2018)"
 OUT = ROOT / "artifacts" / "deep_baseline.json"
 DAYS, WEEKS = 1036, 148
+METRICS = ("pr_auc", "auc", "recall", "precision", "f1", "mcc", "gmean")
 
 try:
     import torch
@@ -153,9 +155,13 @@ def main() -> None:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--max-epochs", type=int, default=60)
     parser.add_argument("--plot-only", action="store_true")
+    parser.add_argument("--splits", action="store_true",
+                        help="Also train on the five other random splits of scripts/robustness.py (seeds 1-5)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
-    if not args.plot_only:
+    if args.splits:
+        other_splits(args)
+    elif not args.plot_only:
         if torch is None:
             raise SystemExit("PyTorch is not installed. Run: pip install -r requirements-research.txt")
         torch.set_num_threads(max(1, torch.get_num_threads()))
@@ -210,6 +216,54 @@ def main() -> None:
         print(f"test: PR-AUC {m['pr_auc']:.4f}, ROC-AUC {m['auc']:.4f}, recall {m['recall']:.4f}, "
               f"precision {m['precision']:.4f}; {fit_seconds:.0f} s training")
     plot()
+
+
+def other_splits(args) -> None:
+    """
+    The same network trained, calibrated and thresholded on each of the other random splits used in
+    scripts/robustness.py, next to standard XGBoost's results on the same splits (from robustness.json).
+    """
+    if torch is None:
+        raise SystemExit("PyTorch is not installed. Run: pip install -r requirements-research.txt")
+    data = json.loads(OUT.read_text())
+    robustness = json.loads((ROOT / "artifacts" / "robustness.json").read_text())["splits"]
+    study = load_study()
+    values, mask = prepare(study.wide, study.config.get("preprocessing"))
+    position = {c: i for i, c in enumerate(study.wide.index)}
+    y = study.y.to_numpy(dtype=int)
+    per_seed = {"42": {m: float(data["result"]["metrics"][m]) for m in METRICS}}
+    for seed in robustness["seeds"]:
+        if seed == 42:
+            continue
+        idx = dict(zip(("train", "val", "test"), study.split(seed)))
+        rows = {k: np.array([position[c] for c in v]) for k, v in idx.items()}
+        model, history = train(values[rows["train"]], mask[rows["train"]], y[rows["train"]],
+                               values[rows["val"]], mask[rows["val"]], y[rows["val"]], args.device,
+                               max_epochs=args.max_epochs)
+        raw_val = predict(model, values[rows["val"]], mask[rows["val"]], args.device)
+        platt = fit_platt(raw_val, y[rows["val"]])
+        threshold = select_threshold(y[rows["val"]], apply_platt(raw_val, platt),
+                                     strategy=study.config["evaluation"].get("threshold_strategy", "f1"))
+        cal_test = apply_platt(predict(model, values[rows["test"]], mask[rows["test"]], args.device), platt)
+        metrics = classification_metrics(y[rows["test"]], cal_test, threshold)
+        per_seed[str(seed)] = {m: float(metrics[m]) for m in METRICS}
+        per_seed[str(seed)]["epochs_run"] = len(history)
+        print(f"seed {seed}: PR-AUC {metrics['pr_auc']:.4f} (standard XGBoost "
+              f"{robustness['pipelines']['xgboost']['per_seed'][str(seed)]['pr_auc']:.4f})", flush=True)
+    seeds = [str(s) for s in robustness["seeds"]]
+    xgb = robustness["pipelines"]["xgboost"]["per_seed"]
+    values_by = {m: np.array([per_seed[s][m] for s in seeds]) for m in METRICS}
+    data["splits"] = {
+        "seeds": robustness["seeds"], "per_seed": per_seed,
+        "mean": {m: float(v.mean()) for m, v in values_by.items()},
+        "sd": {m: float(v.std(ddof=1)) for m, v in values_by.items()},
+        "difference_from_standard_xgboost": {m: [per_seed[s][m] - xgb[s][m] for s in seeds] for m in METRICS},
+        "higher_pr_auc_than_standard_xgboost": int(sum(per_seed[s]["pr_auc"] > xgb[s]["pr_auc"] for s in seeds)),
+        "note": "Same architecture and training settings on every split; standard XGBoost from robustness.json.",
+    }
+    OUT.write_text(json.dumps(data, indent=2))
+    print(f"mean PR-AUC {data['splits']['mean']['pr_auc']:.4f} ± {data['splits']['sd']['pr_auc']:.4f}; "
+          f"above standard XGBoost on {data['splits']['higher_pr_auc_than_standard_xgboost']} of {len(seeds)} splits")
 
 
 def plot() -> None:
