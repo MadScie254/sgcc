@@ -121,6 +121,22 @@ def test_changed_model_files_disable_scoring(client, monkeypatch):
     assert client.get("/api/health").status_code == 200
 
 
+def test_root_explains_how_to_open_the_console_until_it_is_built(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "frontend_dist", (tmp_path / "missing").resolve())
+    page = client.get("/")
+    assert page.status_code == 200 and "npm run dev" in page.text and "/api/health" in page.text
+    assert client.get("/cases").status_code == 404
+    assert client.get("/api/nope").status_code == 404
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<div id=root></div>")
+    monkeypatch.setattr(main, "frontend_dist", dist.resolve())
+    assert client.get("/").text == "<div id=root></div>"
+    assert client.get("/cases/123").text == "<div id=root></div>"  # client-side routes get the app
+    assert client.get("/api/nope").status_code == 404
+
+
 def test_frontend_paths_cannot_escape_build_dir(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     dist.mkdir()

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.dependencies.auth import current_user, load_api_keys, make_rate_limiter
@@ -193,15 +193,36 @@ def resolve_frontend_file(path: str) -> Path | None:
     return None
 
 
-if (frontend_dist / "index.html").is_file():
-    if (frontend_dist / "assets").exists():
-        app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+CONSOLE_NOT_BUILT = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>GridSentinel API</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#14161b}
+code{background:#f1efea;padding:.1rem .3rem;border-radius:4px}</style></head>
+<body><h1>GridSentinel API is running</h1>
+<p>Health: <a href="/api/health">/api/health</a>.{docs}</p>
+<p>The console is not built into this server. Either run it separately:</p>
+<pre><code>cd frontend
+npm ci
+npm run dev</code></pre>
+<p>and open <a href="http://localhost:5173">http://localhost:5173</a>, or build it once with
+<code>npm run build</code> in <code>frontend/</code>, restart uvicorn and reload this page.</p>
+</body></html>"""
 
-    @app.get("/{path:path}", include_in_schema=False)
-    def serve_frontend(path: str):
-        if path == "api" or path.startswith("api/"):
+
+if (frontend_dist / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+
+
+@app.get("/{path:path}", include_in_schema=False)
+def serve_frontend(path: str):
+    if path == "api" or path.startswith("api/"):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    if not (frontend_dist / "index.html").is_file():
+        # No console build: say how to open it instead of a bare 404.
+        if path:
             return JSONResponse(status_code=404, content={"detail": "Not Found"})
-        file_path = resolve_frontend_file(path)
-        if file_path is not None:
-            return FileResponse(file_path)
-        return FileResponse(frontend_dist / "index.html")
+        docs = ' API docs: <a href="/api/docs">/api/docs</a>.' if IS_DEVELOPMENT else ""
+        return HTMLResponse(CONSOLE_NOT_BUILT.replace("{docs}", docs))
+    file_path = resolve_frontend_file(path)
+    if file_path is not None:
+        return FileResponse(file_path)
+    return FileResponse(frontend_dist / "index.html")
