@@ -133,7 +133,7 @@ def train(values, mask, y, val_values, val_mask, y_val, device: str, seed: int =
             loss = loss_fn(model(v, m), target)
             loss.backward()
             optimiser.step()
-            total += float(loss) * len(idx)
+            total += loss.item() * len(idx)
         score = float(average_precision_score(y_val, predict(model, val_values, val_mask, device)))
         history.append({"epoch": epoch, "train_loss": total / len(y), "validation_pr_auc": score})
         print(f"epoch {epoch}: loss {total / len(y):.4f}, validation PR-AUC {score:.4f}", flush=True)
