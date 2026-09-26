@@ -66,7 +66,8 @@ def main() -> None:
             print(f"last {months} months ({wide.shape[1]} days): PR-AUC {results[str(months)]['pr_auc']:.4f}, "
                   f"recall {results[str(months)]['recall']:.4f}", flush=True)
         OUT.write_text(json.dumps({"windows": results, "end": str(study.wide.columns.max().date()),
-                                   "pipeline": "xgboost", "test_customers": int(len(study.test_idx))}, indent=2))
+                                   "pipeline": "xgboost", "test_customers": int(len(study.test_idx)),
+                                   "base_rate": float(study.y.loc[study.test_idx].mean())}, indent=2))
     plot(json.loads(OUT.read_text()))
 
 
@@ -74,12 +75,18 @@ def plot(data: dict) -> None:
     rows = sorted(data["windows"].values(), key=lambda r: r["months"])
     months = [r["months"] for r in rows]
     fig, ax = plt.subplots(figsize=(8, 4.2))
-    for key, color, label in (("pr_auc", ORANGE, "PR-AUC"), ("recall", BLUE, "Recall at the validation threshold"),
-                              ("precision", "#1baf7a", "Precision at the validation threshold")):
+    # Threshold-free measures only: recall and precision depend on each window's own threshold.
+    for key, color, label, offset in (("auc", BLUE, "ROC-AUC", 7), ("pr_auc", ORANGE, "PR-AUC", -13)):
         vals = [r[key] for r in rows]
         ax.plot(months, vals, marker="o", color=color, label=label)
         for x, v in zip(months, vals):
-            ax.annotate(f"{v:.2f}", (x, v), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=7.5, color=INK2)
+            ax.annotate(f"{v:.3f}", (x, v), textcoords="offset points", xytext=(0, offset), ha="center",
+                        fontsize=7.5, color=INK2)
+    base_rate = data.get("base_rate")
+    if base_rate:
+        ax.axhline(base_rate, color="#b9b8b2", ls="--", lw=1)
+        ax.text(months[-1], base_rate + 0.015, f"PR-AUC of random guessing ({base_rate:.3f})", ha="right",
+                fontsize=7.5, color=INK2)
     ax.set_xticks(months)
     ax.set_xlabel("Months of meter history used (most recent, ending 31 Oct 2016)")
     ax.set_ylabel("Test customers")
