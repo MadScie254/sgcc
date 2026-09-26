@@ -91,11 +91,50 @@ untouched), one change at a time, each fold scored separately:
 - **Class weighting adds nothing once the model is tuned:** F (no weight) and B are
   within one fold SD of each other.
 - **Imputation and resampling cost ranking quality.** Filling gaps smooths away theft
-  signal, and SMOTE+ENN shifts the model towards recall rather than a better ranking.
+  signal, and resampling gives no better ranking (see the stress tests below).
 - **SMOTE+ENN does clean the training data** (Objective 1, `artifacts/resampling.json`).
   ENN removes 4,539 honest boundary rows, the Fisher ratio rises from 0.014 to 0.022,
   and the share of theft rows with honest-majority neighbours falls from 90% to 23%.
   That cleaner training data does not carry over to better test-set ranking.
+
+**Stress tests of the result** (`scripts/resampling_study.py`, `robustness.py`,
+`history_length.py`, `deep_baseline.py`, `literature_metrics.py`; figures 5.21–5.25):
+
+- **The cleaning step, not SMOTE+ENN, explains the proposed pipeline's deficit.**
+  SMOTE+ENN on *raw* readings, tuned and scored like the others, reaches a test PR-AUC of
+  0.504 (95% CI 0.465–0.544): level with standard XGBoost (0.513; −0.009, −0.026 to
+  +0.008, Holm p = 0.31; McNemar p = 0.90) and significantly above the proposed pipeline on
+  cleaned readings (+0.042, p < 0.001).
+- **No resampling setting beats none.** In 5-fold CV with standard XGBoost's hyperparameters,
+  every treatment is lower than no resampling (0.507), more so the more it rebalances:
+  SMOTE 0.496 (ratio 0.2) to 0.445 (1.0), SMOTE+ENN 0.453 to 0.411, SMOTE-Tomek 0.468,
+  Borderline-SMOTE 0.478, ADASYN 0.462, random undersampling 0.474.
+- **The ranking of the five pipelines holds on six random splits** (tuned hyperparameters
+  fixed; seed 42 reproduces the table above exactly): standard XGBoost is first on all six
+  (PR-AUC 0.510 ± 0.007), SMOTE+ENN on raw readings 0.479 ± 0.015, the proposed pipeline
+  0.458 ± 0.008. The proposed pipeline's recall lead on the study's split does not hold
+  (mean recall 0.444 against 0.471).
+- **Missing readings help, but behaviour carries the signal.** Without the eight
+  missing-reading features, CV PR-AUC falls from 0.507 to 0.468; consumption behaviour alone
+  (gaps filled, no missingness left) still reaches 0.400, and the missing-reading features
+  alone 0.333, against 0.085 by chance.
+- **History matters.** With only the most recent 3, 12 or 24 months of readings, test
+  PR-AUC is 0.274, 0.319 and 0.396, against 0.513 with all 34.
+- **A Wide & Deep CNN in the style of Zheng et al. (2018), reading the daily series
+  directly, beats the feature-based XGBoost.** Trained on 4 CPU cores in about 4 minutes
+  (0.27 ms per customer), it reaches PR-AUC 0.538 on the study's split (+0.025, not
+  significant alone; ROC-AUC +0.029, p = 0.003; recall +0.054, p = 0.026) and is ahead on
+  all six splits: PR-AUC 0.563 ± 0.017 against 0.510 ± 0.007 (mean +0.052), and higher
+  ROC-AUC, recall, F1 and MCC on every split.
+- **Top of the list:** standard XGBoost has MAP@100 0.960 and precision 0.938 in the top 1%
+  (CNN 0.921 and 0.891); the CNN finds more thieves further down (recall 0.563 in the top
+  10% against 0.518) and is worth more under the example budget (+1,698 per 1,000
+  customers, 95% CI +157 to +3,130). MAP@N depends on the test set's size and base rate,
+  so it compares with published SGCC values only roughly.
+
+The console still serves standard XGBoost: the CNN is a research result so far (it needs
+PyTorch at serving time, and its explanations would need a different method from the tree
+SHAP the case pages use).
 
 **Limitation.** Customers were split at random, so the test set measures performance
 on unseen customers from the same utility and period. SGCC labels are per customer and

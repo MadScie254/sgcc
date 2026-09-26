@@ -39,11 +39,27 @@ McNemar's exact test on the flag decisions (`artifacts/significance.json`, Fig. 
 - **Against both SMOTE baselines** it is significantly better on PR-AUC, ROC-AUC, F1,
   recall and MCC. Against logistic regression + SMOTE it is better on every metric.
 
-SMOTE+ENN therefore does not give a better model. It moves the operating point
-slightly towards recall at a clear cost in precision and ranking. The console serves
-standard XGBoost because it has the higher validation PR-AUC, which is the selection
-rule fixed before looking at the test set. Section 3.13 of the proposal commits to
-reporting this outcome as it is.
+SMOTE+ENN therefore does not give a better model. The console serves standard XGBoost
+because it has the higher validation PR-AUC, which is the selection rule fixed before
+looking at the test set. Section 3.13 of the proposal commits to reporting this outcome
+as it is.
+
+**Stress tests** (figures 5.21–5.25) sharpen the finding:
+
+- The proposed pipeline changes two things, cleaning and SMOTE+ENN. With SMOTE+ENN on
+  *raw* readings, tuned the same way, the test PR-AUC is 0.504, level with standard
+  XGBoost (no metric differs significantly) and significantly above the proposed pipeline
+  (+0.042). The deficit comes from the cleaning, which fills the gaps that carry signal.
+- No resampling ratio, ENN neighbourhood or variant (SMOTE-Tomek, Borderline-SMOTE,
+  ADASYN, undersampling) beats no resampling in cross-validation.
+- On six random splits standard XGBoost stays first among the five pipelines, and the
+  proposed pipeline's recall lead on the study's split disappears (0.444 against 0.471).
+- The model uses missing readings but does not depend on them: consumption behaviour
+  alone reaches a CV PR-AUC of 0.400 (chance 0.085).
+- A Wide & Deep CNN in the style of Zheng et al. (2018), trained on a CPU, beats standard
+  XGBoost on all six splits (PR-AUC 0.563 ± 0.017 against 0.510 ± 0.007). For RQ4 this
+  means the tuned gradient-boosting model is not the ceiling: a model that reads the daily
+  series directly does better at a modest CPU cost.
 
 An earlier version of this analysis used paired t-tests over ten cross-validation
 folds of the training and validation customers. It was replaced because those
