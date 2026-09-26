@@ -70,6 +70,20 @@ Tables for Chapter 3: the Appendix A tables are filled in `docs/data-quality.md`
 | 5.8 | `fig-5-8-shap-summary` | section 3.12 | *SHAP summary of the top 20 features: each dot a customer, colour the feature value.* High day-to-day volatility and long reporting gaps push towards theft; few missing reads early in the period followed by gaps later is typical of a meter that stops reporting. |
 | 5.7 | `fig-5-7-shap-waterfall-case` | section 3.12 | *SHAP waterfall for one flagged customer, from the average raw score to its raw score, then its calibrated probability.* |
 
+### Stress tests of the result
+
+| Figure | File | Research question | Caption and what to say |
+|---|---|---|---|
+| 5.21 | `fig-5-21-resampling-sensitivity` | RQ2 / SO1 | *Resampling choices against no resampling: 5-fold CV on the 36,016 development customers, raw readings, standard XGBoost's tuned hyperparameters held fixed.* Every treatment is below no resampling (0.507), more so the more it rebalances; ENN's neighbourhood makes no difference. Tuned separately and scored on the test customers, SMOTE+ENN on raw readings (0.504) is level with standard XGBoost (0.513; no metric differs significantly) and well above the proposed pipeline on cleaned readings (0.462): the proposed pipeline's deficit comes from the cleaning step. `artifacts/resampling_study.json` |
+| 5.22 | `fig-5-22-split-stability` | RQ4 / SO4, validity | *Test PR-AUC of every pipeline on six random 70/15/15 splits (circled: the study's split), tuned hyperparameters held fixed.* Standard XGBoost is first on all six (0.510 ± 0.007). The proposed pipeline's recall lead on the study's split does not hold across splits. `artifacts/robustness.json` |
+| 5.23 | `fig-5-23-missingness` | validity, section 3.12 | *How much the model relies on missing readings.* Without the eight missing-reading features 0.468; consumption behaviour alone (gaps filled, no missingness left) 0.400; the missing-reading features alone 0.333; chance 0.085. The model uses both, and behaviour alone detects theft far above chance. |
+| 5.24 | `fig-5-24-history-length` | practice | *Detection quality with only the most recent 3 to 34 months of readings (standard XGBoost).* PR-AUC 0.274 (3 months), 0.319 (12), 0.396 (24), 0.513 (34). `artifacts/history_length.json` |
+| 5.25 | `fig-5-25-extension-pr-curves` | RQ4 / literature | *Precision-recall curves of the served, proposed, raw-readings SMOTE+ENN and Wide & Deep CNN pipelines on the test customers.* The CNN (Zheng et al., 2018 style, trained on a CPU) is below XGBoost at the very top of the list and above it from about 35% recall on. `artifacts/deep_baseline.json` |
+
+Table for the literature comparison: MAP@100/200, precision in the top 1% and 5%, recall
+in the top 5% and 10%, and value under an inspection budget for every pipeline, with
+bootstrap intervals, in `artifacts/literature_metrics.json`.
+
 Tables for Chapter 5: the comparison (with bootstrap intervals), calibration and
 ablation tables in the repository README, and every interval and p-value in
 `artifacts/significance.json`.
@@ -88,6 +102,11 @@ python scripts/significance.py           # figure 5.16 data (~1 min, no refittin
 python scripts/ablation.py               # figure 5.6 (~20 min; --device cuda); --plot-only redraws it
 python scripts/data_quality.py           # docs/data-quality.md
 python scripts/make_thesis_figures.py    # figures 3.2, 3.3, 5.1–5.5 and 5.8–5.18 (from the saved predictions)
+python scripts/resampling_study.py       # figure 5.21 (~20 min; --device cuda)
+python scripts/robustness.py             # figures 5.22, 5.23 (~10 min)
+python scripts/history_length.py         # figure 5.24 (~5 min)
+python scripts/deep_baseline.py          # figure 5.25 (PyTorch: pip install -r requirements-research.txt); --splits
+python scripts/literature_metrics.py     # MAP@N and budget table (reads the saved predictions)
 ```
 
 The screenshots (4.x, 5.7) were captured from the running console (production mode,

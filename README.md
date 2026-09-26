@@ -290,6 +290,18 @@ python scripts/data_quality.py         # proposal Appendix A tables -> docs/data
 python scripts/make_thesis_figures.py  # docs/thesis-figures (from the saved predictions)
 ```
 
+Stress tests of the result (after training; each writes `artifacts/<name>.json` and a figure;
+`--plot-only` redraws it):
+
+```bash
+python scripts/resampling_study.py     # SMOTE+ENN on raw readings, tuned; resampling grid (~20 min)
+python scripts/robustness.py           # six random splits; reliance on missing readings (~10 min)
+python scripts/history_length.py       # 3 to 34 months of history (~5 min)
+pip install -r requirements-research.txt
+python scripts/deep_baseline.py        # Wide & Deep CNN, CPU (~5 min); --splits: the other five splits (~20 min)
+python scripts/literature_metrics.py   # MAP@100/200, top-share precision, budget value (~1 min)
+```
+
 On an NVIDIA GPU (for example a Quadro P2000; Windows, conda `ml_env`), add `--device cuda`
 to the commands that fit XGBoost:
 
