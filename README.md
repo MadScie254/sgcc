@@ -2,8 +2,9 @@
 
 Electricity-theft detection on the SGCC smart-meter dataset (42,372 customers,
 daily kWh from 2014-01-01 to 2016-10-31, ~8.5% labelled theft): the SMOTE+ENN +
-XGBoost framework of the research proposal evaluated against its baselines, the
-winning model served by a FastAPI backend, and a React operations console.
+XGBoost framework of the research proposal evaluated against its baselines, a hybrid
+ensemble (a Wide & Deep CNN on the daily readings blended with XGBoost on engineered
+features) served by a FastAPI backend, and a React operations console.
 
 ## The console
 
@@ -14,11 +15,11 @@ never show a label. The research page is the study record on the **test customer
 |---|---|
 | Command center | Customers flagged, expected thefts among them (sum of calibrated probabilities), the scoring pipeline's last run, the investigation queue, the risk distribution, and what the threshold means on validation customers |
 | Case files | Every flagged customer as a case, with status, who changed it last and the strongest signal; search waits for typing to pause |
-| Case file | Consumption history (gaps shaded), a SHAP waterfall of the raw score and the calibrated probability, the explanation-consistency check (LIME), the next workflow steps allowed for your role, a resolution form (finding and evidence reference), the case history with actors, and a case-file PDF |
+| Case file | Consumption history (gaps shaded), the hybrid's probability and its two parts, a SHAP waterfall of the XGBoost part, the weeks of readings that raised the CNN part's score, the explanation-consistency check (LIME), the next workflow steps allowed for your role, a resolution form (finding and evidence reference), the case history with actors, and a case-file PDF |
 | Pipeline | The scoring workflow (ingest → features → score → explain → route) with timings, run history and who started each run; the stages of the training run behind the served model |
 | Threshold studio | Precision and recall on the validation customers, workload and expected thefts in the population, and an inspection budget (capacity, cost per visit, value per theft) with the net-value curve; supervisors publish the threshold |
 | Reports & scoring | Operations PDFs (portfolio, dataset, case) and the research PDF; upload meter data or feature rows and see the scores; supervisors promote a meter-data upload to the population in service and delete files |
-| Research evaluation | Test-set metrics of the served pipeline, all five pipelines with bootstrap intervals and significance tests, calibration (reliability diagram, Brier, ECE), what SMOTE+ENN does to the training data, global SHAP drivers, and the training provenance (code commit, data hash, library versions) |
+| Research evaluation | Test-set metrics of the served pipeline, the five study pipelines with bootstrap intervals and significance tests, the CNN and the hybrid, calibration (reliability diagram, Brier, ECE), what SMOTE+ENN does to the training data, global SHAP drivers, and the training provenance (code commit, data hash, library versions) |
 | Settings | Your API key (kept for the browser tab only), who you are signed in as, service health, and, for supervisors, the audit log |
 
 ## Model
@@ -37,12 +38,15 @@ was made on training and validation customers:
 | Pipeline | ROC-AUC | PR-AUC (95% CI) | Recall | Precision | F1 | MCC | G-Mean |
 |---|---|---|---|---|---|---|---|
 | SMOTE+ENN + XGBoost (proposed) | 0.828 | 0.462 (0.422–0.502) | **0.494** | 0.389 | 0.435 | 0.379 | **0.677** |
-| **XGBoost, no resampling (served)** | **0.850** | **0.513** (0.474–0.553) | 0.467 | **0.487** | **0.476** | **0.429** | 0.667 |
+| **XGBoost, no resampling** | **0.850** | **0.513** (0.474–0.553) | 0.467 | **0.487** | **0.476** | **0.429** | 0.667 |
 | XGBoost, default settings | 0.839 | 0.488 (0.448–0.528) | 0.483 | 0.439 | 0.460 | 0.408 | 0.675 |
 | Random forest + SMOTE | 0.812 | 0.411 (0.373–0.451) | 0.432 | 0.366 | 0.396 | 0.336 | 0.634 |
 | Logistic regression + SMOTE | 0.754 | 0.314 (0.278–0.354) | 0.371 | 0.318 | 0.342 | 0.277 | 0.586 |
+| Wide & Deep CNN (daily readings) | 0.880 | 0.538 (0.498–0.579) | 0.520 | 0.516 | 0.518 | 0.473 | 0.705 |
+| **Hybrid: CNN + XGBoost (served)** | **0.908** | **0.617** (0.579–0.654) | **0.611** | **0.525** | **0.564** | **0.522** | **0.761** |
 
-Served threshold: 0.243 (calibrated probability).
+Served threshold: 0.216 (calibrated probability). The first five rows are the study's
+pipelines; the CNN and the hybrid were added after the study (see "Served model" below).
 <!-- metrics:end -->
 
 **Significance** (`scripts/significance.py`, `artifacts/significance.json`): a paired
@@ -58,13 +62,15 @@ p-values; McNemar's exact test compares the flag decisions.
 - **Against the SMOTE baselines**, it is significantly better on PR-AUC, ROC-AUC, F1,
   recall and MCC (random forest: PR-AUC +0.050, p < 0.001; logistic regression: +0.148).
 
-The console serves the pipeline with the higher validation PR-AUC, standard XGBoost.
+Among the study's pipelines, standard XGBoost had the higher validation PR-AUC; the
+console now serves the hybrid built on it (below).
 `docs/proposal-alignment.md` discusses the outcome against the proposal's objectives.
 
 **Calibration** (`artifacts/calibration.json`): resampling and class weights inflate
 raw scores. On the test customers, Platt scaling fitted on validation brings the
 proposed pipeline's expected calibration error from 0.093 to 0.007 and its Brier score
-from 0.080 to 0.060; the served pipeline goes from 0.010 to 0.007. Isotonic regression
+from 0.080 to 0.060; standard XGBoost goes from 0.010 to 0.007 and the served hybrid from
+0.025 to 0.004 (Brier 0.049). Isotonic regression
 is reported alongside. Calibration never changes the ranking, so ROC-AUC, PR-AUC and the
 case queue are unaffected.
 
@@ -132,9 +138,37 @@ untouched), one change at a time, each fold scored separately:
   customers, 95% CI +157 to +3,130). MAP@N depends on the test set's size and base rate,
   so it compares with published SGCC values only roughly.
 
-The console still serves standard XGBoost: the CNN is a research result so far (it needs
-PyTorch at serving time, and its explanations would need a different method from the tree
-SHAP the case pages use).
+**Served model: the hybrid ensemble** (`python -m src.train` with PyTorch installed;
+`scripts/hybrid_study.py`, `artifacts/hybrid_study.json`, Figure 5.26). The CNN and XGBoost
+make different mistakes, so the console serves a blend of the two:
+
+- **How it is built:** both parts are fitted on the training customers and Platt-calibrated
+  on validation; the hybrid is `0.55 × CNN + 0.45 × XGBoost` (weight chosen on validation
+  PR-AUC over a 0.05 grid), recalibrated with Platt scaling and thresholded at the F1
+  maximum, all on validation. Training serves whichever pipeline has the highest validation
+  PR-AUC: hybrid 0.636, CNN 0.561, XGBoost 0.501.
+- **On the test customers** it reaches PR-AUC 0.617 and ROC-AUC 0.908, and at its threshold
+  finds 331 of the 542 thieves (recall 0.611) with 300 false alarms (precision 0.525).
+- **Significance** (paired bootstrap, 10,000 resamples, Holm; McNemar on the flags): against
+  standard XGBoost, PR-AUC +0.104 (95% CI +0.078 to +0.129), ROC-AUC +0.057, recall +0.144,
+  precision +0.038, F1 +0.088, MCC +0.093, all p < 0.05 (McNemar p = 0.039). Against the CNN
+  alone, PR-AUC +0.078 (+0.057 to +0.100), ROC-AUC +0.028, recall +0.090, F1 +0.046 (all
+  p < 0.001); precision (+0.009) and the flag decisions (McNemar p = 0.42) do not differ
+  significantly.
+- **On six random splits** the CNN weight is 0.55 every time and the hybrid has the higher
+  PR-AUC on all six: 0.633 ± 0.012, against 0.563 ± 0.017 (CNN) and 0.510 ± 0.007 (XGBoost).
+- **Serving needs no PyTorch:** training exports the CNN to ONNX (`models/sequence.onnx`,
+  299,866 parameters) and the API scores it with onnxruntime. Scoring takes about 0.16 ms
+  per customer. The hybrid needs daily readings, so feature-row uploads are refused.
+- **Explanations:** the case page shows SHAP for the XGBoost part and, for the CNN part,
+  how much each week raised its score in log-odds (the week replaced by the customer's
+  typical day). `GET /api/customers/{id}/sequence-explanation` returns the weeks.
+- **A caveat:** like XGBoost's missing-reading features, the CNN uses gaps. Around the
+  missing 2016-09-18 release date, September 2016 is the week that most raises the score of
+  9 of the 40 highest-risk customers in service.
+
+Without PyTorch, training falls back to the study's five pipelines and serves standard
+XGBoost, as before.
 
 **Limitation.** Customers were split at random, so the test set measures performance
 on unseen customers from the same utility and period. SGCC labels are per customer and
@@ -322,7 +356,7 @@ check, a threshold publish round trip, and that the operations and research PDFs
 ```bash
 python scripts/download_data.py        # full SGCC dataset -> data/sgcc_full.csv (175 MB, no credentials)
 python -m src.train --quick            # smoke run into artifacts/quick/ (never touches the served model)
-python -m src.train                    # full run: 2 × 40 Optuna trials, 5-fold CV (~20 min on 4 CPU cores)
+python -m src.train                    # full run: 2 × 40 Optuna trials, 5-fold CV, the CNN and the hybrid (~25 min on 4 CPU cores)
 python scripts/significance.py         # paired bootstrap + McNemar on the saved test predictions (~1 min)
 python scripts/ablation.py             # one-change-at-a-time ablation (~20 min)
 python scripts/data_quality.py         # proposal Appendix A tables -> docs/data-quality.md
@@ -339,6 +373,7 @@ python scripts/history_length.py       # 3 to 34 months of history (~5 min)
 pip install -r requirements-research.txt
 python scripts/deep_baseline.py        # Wide & Deep CNN, CPU (~5 min); --splits: the other five splits (~20 min)
 python scripts/literature_metrics.py   # MAP@100/200, top-share precision, budget value (~1 min)
+python scripts/hybrid_study.py         # the hybrid on six random splits (~30 min); --significance: served split only
 ```
 
 On an NVIDIA GPU (for example a Quadro P2000; Windows, conda `ml_env`), add `--device cuda`
@@ -361,7 +396,9 @@ customer split, SMOTE+ENN on training rows only and redone inside every CV fold 
 Optuna tuning of both XGBoost pipelines on the mean PR-AUC of five separately scored
 folds, with early stopping on validation (3.10), Platt calibration and threshold choice
 on validation, and one scoring of the untouched test customers for every pipeline
-(3.11). The XGBoost pipeline with the higher validation PR-AUC is served.
+(3.11). The servable pipeline with the highest validation PR-AUC is served: the hybrid
+when PyTorch is installed (`pip install -r requirements-research.txt`), otherwise the
+XGBoost pipeline with the higher validation PR-AUC.
 `docs/proposal-alignment.md` maps every objective and research question to its evidence.
 
 Training stages every output, moves it into place and writes `artifacts/manifest.json`
