@@ -156,7 +156,7 @@ def plot(data: dict) -> None:
     left.set_xlabel("CNN training seed")
     left.set_ylabel("Test-set PR-AUC")
     left.set_title("Five training seeds", pad=8)
-    left.legend(fontsize=8.5, loc="lower center", frameon=False)
+    left.legend(fontsize=8.5, loc="center right", frameon=False)
 
     rows = [(v["label"], v["cnn"]["pr_auc"], v["hybrid"]["pr_auc"]) for v in data["variants"].values()]
     rows.append(("Behaviour only: no channel, no September\n2016, XGBoost without missing-reading features",
@@ -167,12 +167,17 @@ def plot(data: dict) -> None:
             right.plot([c], [yi + 0.12], "o", color=SLATE)
             right.annotate(f"{c:.3f}", (c, yi + 0.12), xytext=(0, 7), textcoords="offset points", ha="center", fontsize=8)
         right.plot([h], [yi - 0.12], "o", color=TEAL)
-        right.annotate(f"{h:.3f}", (h, yi - 0.12), xytext=(0, -13), textcoords="offset points", ha="center", fontsize=8)
+        offset = (0, 7) if c is None else (0, -13)
+        right.annotate(f"{h:.3f}", (h, yi - 0.12), xytext=offset, textcoords="offset points", ha="center", fontsize=8)
+    xgb_b = data["xgboost_behaviour_only"]["pr_auc"]
+    right.plot([xgb_b], [y[-1] - 0.12], "o", mfc="white", color=ORANGE)
+    right.annotate(f"XGBoost, behaviour only {xgb_b:.3f}", (xgb_b, y[-1] - 0.12), xytext=(0, -13),
+                   textcoords="offset points", ha="center", fontsize=8, color=ORANGE)
     right.axvline(0.513, color=ORANGE, lw=1, ls="--")
-    right.text(0.513, y[0] + 0.45, "XGBoost alone 0.513", color=ORANGE, fontsize=8, ha="center")
+    right.text(0.513, -0.7, " XGBoost alone 0.513", color=ORANGE, fontsize=8, ha="left", va="bottom")
     right.set_yticks(y)
     right.set_yticklabels([r[0] for r in rows], fontsize=8)
-    right.set_ylim(-0.6, len(rows) - 0.3)
+    right.set_ylim(-0.75, len(rows) - 0.3)
     right.set_xlabel("Test-set PR-AUC (grey: CNN alone; green: hybrid)")
     right.set_title("Without the missing-reading information", pad=8)
     fig.suptitle("Checks of the sequence model behind the served hybrid", y=1.02)
