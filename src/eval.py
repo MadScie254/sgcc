@@ -54,6 +54,12 @@ def feature_importance(model, feature_names) -> pd.DataFrame:
     )
 
 
+def net_value(y_true, flags, cost_per_visit: float, value_per_theft: float) -> float:
+    """Value recovered from the thefts caught minus the cost of every visit (the threshold studio's formula)."""
+    y_true, flags = np.asarray(y_true).astype(bool), np.asarray(flags).astype(bool)
+    return float((flags & y_true).sum() * value_per_theft - flags.sum() * cost_per_visit)
+
+
 def baseline_model(name: str, random_state: int = 42):
     """The proposal's reference classifiers; both are trained on SMOTE-treated rows."""
     if name == "random_forest":

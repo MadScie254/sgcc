@@ -12,6 +12,10 @@ significance tests (``scripts/significance.py``) and the ablation study:
 
 Only the two tuned XGBoost pipelines can be served; the one with the higher
 validation PR-AUC is published.
+
+``EXTRA_CANDIDATES`` are studied by the evidence scripts only (never trained by
+``src.train`` or served): xgboost_smote_enn_raw applies SMOTE+ENN to raw readings, so
+its comparison with "xgboost" isolates the resampling from the cleaning.
 """
 
 import time
@@ -38,6 +42,11 @@ CANDIDATES: Dict[str, Dict[str, Any]] = {
                                   "learner": "logistic_regression", "tuned": False},
 }
 SERVABLE = ("proposed", "xgboost")
+EXTRA_CANDIDATES: Dict[str, Dict[str, Any]] = {
+    "xgboost_smote_enn_raw": {"label": "SMOTE+ENN + XGBoost, raw readings", "preprocessing": "raw",
+                              "treatment": "smote_enn", "learner": "xgboost", "tuned": True},
+}
+ALL_CANDIDATES = {**CANDIDATES, **EXTRA_CANDIDATES}
 
 
 @dataclass
@@ -62,7 +71,7 @@ def fit_candidate(name: str, X_train: pd.DataFrame, y_train: pd.Series, params: 
     validation rows when they are given. ``fit_seconds`` covers resampling and fitting.
     XGBoost trains on ``device``; the fitted model is returned on the CPU, where it is scored.
     """
-    spec = CANDIDATES[name]
+    spec = ALL_CANDIDATES[name]
     start = time.perf_counter()
     treatment = Treatment(spec["treatment"], resampling_config, random_state)
     X_tr, y_tr = treatment.fit_resample(X_train, y_train)

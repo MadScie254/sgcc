@@ -25,24 +25,17 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.experiment import CANDIDATES  # noqa: E402
-from src.stats import METRICS, all_metrics, bootstrap_p_value, holm, mcnemar_exact, stratified_counts  # noqa: E402
+from src.stats import METRICS, paired_comparison  # noqa: E402
 from src.train import load_config  # noqa: E402
 
 REFERENCE = "proposed"
 ALPHA = 0.05
-CHUNK = 500
-
-
-def interval(values: np.ndarray) -> dict:
-    low, high = np.percentile(values, [100 * ALPHA / 2, 100 * (1 - ALPHA / 2)])
-    return {"ci_low": float(low), "ci_high": float(high)}
 
 
 def main() -> None:
@@ -60,37 +53,10 @@ def main() -> None:
     others = [n for n in names if n != REFERENCE]
     scores = {n: test[n].to_numpy(dtype=float) for n in names}
     flags = {n: scores[n] >= comparison[n]["threshold"] for n in names}
-    ones = np.ones((1, len(y)))
-    point = {n: {m: float(v[0]) for m, v in all_metrics(y, scores[n], flags[n], ones).items()} for n in names}
-
-    # Resampled metrics for every pipeline on the same resamples (paired), in chunks to bound memory.
-    rng = np.random.default_rng(args.seed)
-    draws = {n: {m: [] for m in METRICS} for n in names}
-    for start in range(0, args.resamples, CHUNK):
-        weights = stratified_counts(y, min(CHUNK, args.resamples - start), rng)
-        for n in names:
-            for m, values in all_metrics(y, scores[n], flags[n], weights).items():
-                draws[n][m].append(values)
-        print(f"{min(start + CHUNK, args.resamples):,}/{args.resamples:,} resamples", flush=True)
-    draws = {n: {m: np.concatenate(v) for m, v in d.items()} for n, d in draws.items()}
-
+    metrics, comparisons = paired_comparison(y, scores, flags, REFERENCE, args.resamples, args.seed, ALPHA,
+                                             progress=True)
     pipelines = {n: {"label": CANDIDATES[n]["label"], "threshold": float(comparison[n]["threshold"]),
-                     "metrics": {m: {"estimate": point[n][m], **interval(draws[n][m])} for m in METRICS}}
-                 for n in names}
-    comparisons = {n: {} for n in others}
-    for m in METRICS:
-        raw_p = []
-        for n in others:
-            diff = draws[REFERENCE][m] - draws[n][m]
-            comparisons[n][m] = {"difference": point[REFERENCE][m] - point[n][m], **interval(diff),
-                                 "p_value": bootstrap_p_value(diff)}
-            raw_p.append(comparisons[n][m]["p_value"])
-        for n, adjusted in zip(others, holm(raw_p)):
-            comparisons[n][m]["p_holm"] = float(adjusted)
-            comparisons[n][m]["significant"] = bool(adjusted < ALPHA)
-    mcnemar = {n: mcnemar_exact(y, flags[REFERENCE], flags[n]) for n in others}
-    for n, adjusted in zip(others, holm([mcnemar[n]["p_value"] for n in others])):
-        comparisons[n]["mcnemar"] = {**mcnemar[n], "p_holm": float(adjusted), "significant": bool(adjusted < ALPHA)}
+                     "metrics": metrics[n]} for n in names}
 
     result = {
         "method": "paired stratified bootstrap and exact McNemar test on the test customers",

@@ -1,0 +1,3 @@
+# Optional: only for scripts/deep_baseline.py (the app and the other scripts do not need it).
+# CPU wheel: pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.3

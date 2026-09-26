@@ -7,6 +7,13 @@ SGCC Theft Detector - Class-imbalance treatment (proposal section 3.9)
 - ``"smote"``: SMOTE oversampling of theft customers.
 - ``"smote_enn"``: SMOTE, then Edited Nearest Neighbours cleaning (the proposal's framework).
 
+For the sensitivity study of the resampling choice (``scripts/resampling_study.py``):
+
+- ``"smote_tomek"``: SMOTE, then removal of Tomek links.
+- ``"borderline_smote"``: Borderline-SMOTE, which only oversamples thieves near the boundary.
+- ``"adasyn"``: ADASYN, which oversamples more where thieves are harder to learn.
+- ``"undersample"``: random undersampling of honest customers (no synthetic rows).
+
 Resampling needs complete, comparably scaled rows, so missing feature values are
 filled with the training medians and distances are measured on standardised
 features. Resampled rows are mapped back to the original units, so a model
@@ -22,13 +29,13 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from imblearn.over_sampling import SMOTE
-from imblearn.under_sampling import EditedNearestNeighbours
+from imblearn.over_sampling import ADASYN, SMOTE, BorderlineSMOTE
+from imblearn.under_sampling import EditedNearestNeighbours, RandomUnderSampler, TomekLinks
 from sklearn.metrics import silhouette_score
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
-TREATMENTS = ("none", "smote", "smote_enn")
+TREATMENTS = ("none", "smote", "smote_enn", "smote_tomek", "borderline_smote", "adasyn", "undersample")
 
 DEFAULT_RESAMPLING_CONFIG = {
     "sampling_strategy": 0.5,  # theft : honest after SMOTE
@@ -68,11 +75,22 @@ class Treatment:
         Z = scaler.transform(filled)
         y_arr = np.asarray(y).astype(int)
 
-        smote = SMOTE(sampling_strategy=self.config["sampling_strategy"],
-                      k_neighbors=self.config["smote_k_neighbors"], random_state=self.random_state)
-        Z_s, y_s = smote.fit_resample(Z, y_arr)
-        synthetic = len(y_s) - len(y_arr)
+        strategy, k = self.config["sampling_strategy"], self.config["smote_k_neighbors"]
+        if self.kind == "undersample":
+            sampler = RandomUnderSampler(sampling_strategy=strategy, random_state=self.random_state)
+        elif self.kind == "borderline_smote":
+            sampler = BorderlineSMOTE(sampling_strategy=strategy, k_neighbors=k, random_state=self.random_state)
+        elif self.kind == "adasyn":
+            sampler = ADASYN(sampling_strategy=strategy, n_neighbors=k, random_state=self.random_state)
+        else:
+            sampler = SMOTE(sampling_strategy=strategy, k_neighbors=k, random_state=self.random_state)
+        Z_s, y_s = sampler.fit_resample(Z, y_arr)
+        synthetic = max(len(y_s) - len(y_arr), 0)
         stats: Dict[str, Any] = {"before": _counts(y_arr), "after_smote": _counts(y_s), "synthetic_created": int(synthetic)}
+        if self.kind == "smote_tomek":
+            tomek = TomekLinks(sampling_strategy="all")
+            Z_s, y_s = tomek.fit_resample(Z_s, y_s)
+            stats["removed_by_tomek"] = int(sum(stats["after_smote"].values()) - len(y_s))
 
         if self.kind == "smote_enn":
             enn = EditedNearestNeighbours(n_neighbors=self.config["enn_n_neighbors"], kind_sel="mode", sampling_strategy="all")
