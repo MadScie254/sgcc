@@ -206,6 +206,7 @@ A corrected copy of the whole proposal, with every change highlighted in yellow 
   only if its theft rate is similar.
 - Timings are for a 4-core CPU; they scale with hardware.
 - SHAP and LIME agree (≥ 3 of the top 5 signals shared and the same direction on the
-  strongest one) on 19 of the 30 highest-risk customers of the sample population. The
+  strongest one) about the XGBoost part on 16 of the 30 highest-risk customers of the
+  sample population under the served hybrid. The
   console shows disagreement instead of hiding it. Agreement means a stable
   explanation, not a causal one.

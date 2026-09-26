@@ -94,8 +94,12 @@ ablation tables in the repository README, and every interval and p-value in
 
 Limitations to state: SGCC labels are noisy; one utility, 2014–2016, China; the split
 is random by customer, so there is no evidence of performance on later periods or other
-utilities; synthetic SMOTE rows are not real consumption series; SHAP and LIME agree on
-19 of the 30 highest-risk cases, which says the explanation is stable, not causal.
+utilities; synthetic SMOTE rows are not real consumption series; SHAP and LIME agree about
+the XGBoost part on 16 of the 30 highest-risk cases, which says the explanation is stable,
+not causal; the hybrid was designed after the CNN's test result was known (its weight,
+calibration and threshold were chosen on validation, and the six-split check supports it);
+the CNN, like XGBoost, uses reporting gaps, and the missing 2016-09-18 release date makes
+September 2016 a strong week for some customers.
 
 ## Regenerating
 
