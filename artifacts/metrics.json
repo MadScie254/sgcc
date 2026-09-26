@@ -1,19 +1,19 @@
 {
-  "threshold": 0.24279460501034153,
-  "recall": 0.466789667896679,
-  "precision": 0.48653846153846153,
-  "f1": 0.4764595103578154,
-  "accuracy": 0.9125235997482694,
-  "auc": 0.8501039925259933,
-  "pr_auc": 0.5129670494330388,
-  "gmean": 0.6673477284606651,
-  "mcc": 0.42886610375096196,
-  "specificity": 0.9540763673890609,
+  "threshold": 0.2164084163995141,
+  "recall": 0.6107011070110702,
+  "precision": 0.5245641838351822,
+  "f1": 0.5643648763853367,
+  "accuracy": 0.9196035242290749,
+  "auc": 0.9075023451472903,
+  "pr_auc": 0.6166658581683113,
+  "gmean": 0.7610447963061696,
+  "mcc": 0.522186217168482,
+  "specificity": 0.9484004127966976,
   "confusion_matrix": {
-    "tn": 5547,
-    "fp": 267,
-    "fn": 289,
-    "tp": 253
+    "tn": 5514,
+    "fp": 300,
+    "fn": 211,
+    "tp": 331
   },
   "support": {
     "class_0": 5814,
@@ -21,35 +21,36 @@
   },
   "at_threshold_0_5": {
     "threshold": 0.5,
-    "recall": 0.2859778597785978,
-    "precision": 0.7828282828282829,
-    "f1": 0.4189189189189189,
-    "accuracy": 0.9323473882945249,
-    "auc": 0.8501039925259933,
-    "pr_auc": 0.5129670494330388,
-    "gmean": 0.5327877480275592,
-    "mcc": 0.4478552247906803,
-    "specificity": 0.9926040591675267,
+    "recall": 0.4040590405904059,
+    "precision": 0.7577854671280276,
+    "f1": 0.5270758122743683,
+    "accuracy": 0.9381686595342983,
+    "auc": 0.9075023451472903,
+    "pr_auc": 0.6166658581683113,
+    "gmean": 0.6318181768992982,
+    "mcc": 0.5255433030790573,
+    "specificity": 0.9879600963192294,
     "confusion_matrix": {
-      "tn": 5771,
-      "fp": 43,
-      "fn": 387,
-      "tp": 155
+      "tn": 5744,
+      "fp": 70,
+      "fn": 323,
+      "tp": 219
     },
     "support": {
       "class_0": 5814,
       "class_1": 542
     }
   },
-  "validation_pr_auc": 0.5010624256464766,
-  "training_time": 10.56,
-  "inference_ms_per_customer": 0.0057264030837187035,
-  "model_size_mb": 1.376153,
+  "validation_pr_auc": 0.6359771990550295,
+  "training_time": 222.53,
+  "inference_ms_per_customer": 0.16222736359439424,
+  "model_size_mb": 2.5756170000000003,
   "served": true,
-  "pipeline": "xgboost",
-  "pipeline_label": "XGBoost, no resampling",
+  "weight_sequence": 0.55,
+  "pipeline": "hybrid",
+  "pipeline_label": "Hybrid: CNN + XGBoost",
   "model_version": "3.0.0",
-  "trained_at": "2026-09-26T10:10:58+00:00",
+  "trained_at": "2026-09-26T20:49:22+00:00",
   "quick_mode": false,
   "device": "cpu",
   "cv_best_score": 0.5047073081950391,
@@ -69,32 +70,32 @@
   "n_features": 87,
   "calibration": {
     "validation": {
-      "brier": 0.0572533191122847,
-      "log_loss": 0.20973880286825003,
-      "ece": 0.005928083551004438,
-      "mean_predicted": 0.08543975009093946,
+      "brier": 0.047878672539125824,
+      "log_loss": 0.17498304753321017,
+      "ece": 0.007229630607882757,
+      "mean_predicted": 0.08546562216496575,
       "observed_rate": 0.08543108873505349
     },
     "test": {
-      "brier": 0.05659140955672756,
-      "log_loss": 0.20655670317302924,
-      "ece": 0.0070114428036500845,
-      "mean_predicted": 0.08591735338888866,
+      "brier": 0.04907104052815177,
+      "log_loss": 0.1743349384038393,
+      "ece": 0.004352884703501358,
+      "mean_predicted": 0.08549530292010488,
       "observed_rate": 0.08527375707992448
     }
   },
   "stages": [
     {
       "name": "Load",
-      "seconds": 10.35
+      "seconds": 8.86
     },
     {
       "name": "Clean",
-      "seconds": 9.06
+      "seconds": 7.59
     },
     {
       "name": "Features",
-      "seconds": 57.46
+      "seconds": 62.43
     },
     {
       "name": "Split",
@@ -102,23 +103,27 @@
     },
     {
       "name": "Resample",
-      "seconds": 3.89
+      "seconds": 4.18
     },
     {
       "name": "Tune",
-      "seconds": 1065.06
+      "seconds": 1034.43
     },
     {
       "name": "Validate",
-      "seconds": 56.34
+      "seconds": 61.42
+    },
+    {
+      "name": "Sequence",
+      "seconds": 224.61
     },
     {
       "name": "Evaluate",
-      "seconds": 1.6
+      "seconds": 2.96
     },
     {
       "name": "Publish",
-      "seconds": 4.77
+      "seconds": 5.09
     }
   ]
 }

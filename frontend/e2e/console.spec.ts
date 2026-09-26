@@ -89,7 +89,8 @@ test("uploads that cannot be scored safely are rejected with the reason", async 
 
   const features = "CONS_NO,missing_ratio\nA,0.2\n";
   await page.locator("#dataset-file").setInputFiles({ name: "features.csv", mimeType: "text/csv", buffer: Buffer.from(features) });
-  await expect(page.getByRole("alert").filter({ hasText: "Upload rejected" })).toContainText("model features are missing");
+  // A single model names the missing features; the hybrid refuses feature rows outright (it needs daily readings).
+  await expect(page.getByRole("alert").filter({ hasText: "Upload rejected" })).toContainText(/model features are missing|daily readings/);
 });
 
 test("research and operations reports download as PDFs", async ({ page }) => {

@@ -1,8 +1,8 @@
 {
-  "name": "xgboost",
-  "label": "XGBoost, no resampling",
+  "name": "hybrid",
+  "label": "Hybrid: CNN + XGBoost",
   "model_version": "3.0.0",
-  "trained_at": "2026-09-26T10:10:58+00:00",
+  "trained_at": "2026-09-26T20:49:22+00:00",
   "preprocessing": "raw",
   "cleaning": null,
   "feature_config": {
@@ -105,13 +105,13 @@
   "impute": null,
   "calibration": {
     "method": "platt",
-    "a": 0.9812911936585077,
-    "b": -0.162122103182943
+    "a": 1.5050535795430853,
+    "b": 0.873605949833503
   },
-  "threshold": 0.24279460501034153,
+  "threshold": 0.2164084163995141,
   "provenance": {
     "code": {
-      "commit": "8b9f418c411e045fc2eb9dde9540f51295947854",
+      "commit": "d48aa2e37c0c1b1fec5a6e780c5a2b8c40820c50",
       "dirty": false
     },
     "data_file": "sgcc_full.csv",
@@ -128,5 +128,38 @@
       "scipy": "1.16.3",
       "optuna": "4.6.0"
     }
+  },
+  "components": {
+    "xgboost": {
+      "label": "XGBoost, no resampling",
+      "calibration": {
+        "method": "platt",
+        "a": 0.9812911936585077,
+        "b": -0.162122103182943
+      }
+    },
+    "wide_deep_cnn": {
+      "label": "Wide & Deep CNN (sequence model)",
+      "file": "models/sequence.onnx",
+      "days": 1036,
+      "weeks": 148,
+      "cleaning": {
+        "short_gap_days": 3,
+        "cap_kwh": 10000,
+        "outlier_sigma": 3,
+        "zero_run_days": 30
+      },
+      "calibration": {
+        "method": "platt",
+        "a": 0.5909685622666333,
+        "b": -1.75045453366894
+      },
+      "parameters": 299866
+    }
+  },
+  "blend": {
+    "weight_sequence": 0.55,
+    "on": "calibrated probabilities",
+    "recalibrated": "platt on validation"
   }
 }

@@ -229,12 +229,19 @@ def test_research_evaluation(client):
 
 def test_research_comparison_and_significance(client):
     rows = client.get("/api/research/comparison").json()
-    assert [r["model"] for r in rows] == ["proposed", "xgboost", "xgboost_default", "random_forest_smote", "logistic_regression_smote"]
+    study = ["proposed", "xgboost", "xgboost_default", "random_forest_smote", "logistic_regression_smote"]
+    # The five pipelines of the study, then (when training had PyTorch) the sequence model and the hybrid.
+    extra = ["wide_deep_cnn", "hybrid"] if model_service.is_hybrid() else []
+    assert [r["model"] for r in rows] == study + extra
     served = [r for r in rows if r["served"]]
-    assert len(served) == 1 and served[0]["model"] in {"proposed", "xgboost"}
+    assert len(served) == 1 and served[0]["model"] in {"proposed", "xgboost", "hybrid"}
+    assert served[0]["model"] == get_pipeline_spec()["name"]
     assert all(r["inference_ms_per_customer"] > 0 and r["model_size_mb"] > 0 and 0 < r["threshold"] < 1 for r in rows)
-    assert all(r["pr_auc_ci"][0] < r["pr_auc"] < r["pr_auc_ci"][1] for r in rows)
-    assert rows[0]["p_value_pr_auc"] is None and all(0 <= r["p_value_mcnemar"] <= 1 for r in rows[1:])
+    # The significance tests cover the study's five pipelines.
+    tested = rows[:5]
+    assert all(r["pr_auc_ci"][0] < r["pr_auc"] < r["pr_auc_ci"][1] for r in tested)
+    assert tested[0]["p_value_pr_auc"] is None and all(0 <= r["p_value_mcnemar"] <= 1 for r in tested[1:])
+    assert all(r["pr_auc_ci"] is None for r in rows[5:])
     significance = client.get("/api/research/significance").json()
     assert significance["population"] == {"split": "test", "customers": 6356, "theft": 542}
     assert significance["resamples"] == 10_000
@@ -247,7 +254,7 @@ def test_research_curves_calibration_training(client):
     assert sum(dist["honest"]) + sum(dist["theft"]) == 6356 and sum(dist["theft"]) == 542
 
     calibration = client.get("/api/research/calibration").json()
-    assert len(calibration["pipelines"]) == 5 and calibration["fitted_on"] == "validation"
+    assert len(calibration["pipelines"]) == (7 if model_service.is_hybrid() else 5) and calibration["fitted_on"] == "validation"
     assert sum(b["count"] for b in calibration["reliability"]["platt"]) == 6356
 
     resampling = client.get("/api/research/resampling").json()
@@ -259,8 +266,9 @@ def test_research_curves_calibration_training(client):
     assert training["train_customers"] > training["validation_customers"] == training["test_customers"] > 0
     assert len(training["cv_fold_scores"]) == 5
     assert training["cv_best_score"] == pytest.approx(np.mean(training["cv_fold_scores"]), abs=1e-5)
+    sequence_stage = ["Sequence"] if model_service.is_hybrid() else []
     assert [s["name"] for s in training["stages"]] == [
-        "Load", "Clean", "Features", "Split", "Resample", "Tune", "Validate", "Evaluate", "Publish"]
+        "Load", "Clean", "Features", "Split", "Resample", "Tune", "Validate", *sequence_stage, "Evaluate", "Publish"]
     assert training["manifest"]["pipeline"] == training["pipeline"]
 
 
