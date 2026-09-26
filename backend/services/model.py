@@ -378,8 +378,8 @@ def explain_customer(customer_id: str) -> Dict[str, Any]:
 
 def sequence_explanation(customer_id: str) -> Dict[str, Any]:
     """
-    Which weeks of the customer's readings raised the sequence model's score: for each week, the raw
-    score minus the score with that week replaced by the customer's typical day (src.sequence).
+    Which weeks of the customer's readings raised the sequence model's score: for each week, the logit
+    minus the logit with that week replaced by the customer's typical day (src.sequence).
     """
     if not is_hybrid():
         return {"customer_id": customer_id, "available": False, "weeks": []}

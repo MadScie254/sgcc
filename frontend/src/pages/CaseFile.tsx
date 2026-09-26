@@ -220,7 +220,7 @@ export function CaseFilePage() {
       {parts ? (
         <Card label="Weeks that raised the sequence model's score" className="flex flex-col gap-3.5 p-[22px]">
           <CardHeader title="What the sequence model saw"
-            subtitle={`The CNN reads the daily readings directly (${Math.round((weeks.data?.weight ?? 0) * 100)}% of the blended score). Each bar is one week: how much the CNN's score would drop if that week looked like the customer's typical day.`} />
+            subtitle={`The CNN reads the daily readings directly (${Math.round((weeks.data?.weight ?? 0) * 100)}% of the blended score). Each bar is one week: how much the CNN's score (in log-odds, like the SHAP view below) would drop if that week looked like the customer's typical day.`} />
           {weeks.data?.available ? (
             <>
               <WeekEffectsChart weeks={weeks.data.weeks} />

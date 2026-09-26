@@ -98,9 +98,10 @@ class OnnxNetwork:
 
 def week_effects(network: "OnnxNetwork", values: np.ndarray, mask: np.ndarray) -> List[Dict[str, float]]:
     """
-    How much each week of one customer's readings raised the network's raw score: the score minus
-    the score with that week replaced by the customer's typical (median observed) day, marked as
-    observed. Positive = the week pushed towards theft.
+    How much each week of one customer's readings raised the network's output, in log-odds (as SHAP
+    reports the XGBoost part): the logit minus the logit with that week replaced by the customer's
+    typical (median observed) day, marked as observed. Positive = the week pushed towards theft.
+    Log-odds do not saturate, so weeks still show for customers scored near 0 or 1.
     """
     observed = values[mask < 0.5]
     typical = float(np.median(observed)) if observed.size else 0.0
@@ -109,8 +110,8 @@ def week_effects(network: "OnnxNetwork", values: np.ndarray, mask: np.ndarray) -
     for week in range(WEEKS):
         rows_v[week + 1, week * 7:(week + 1) * 7] = typical
         rows_m[week + 1, week * 7:(week + 1) * 7] = 0.0
-    scores = network.predict(rows_v, rows_m)
-    return [{"week": week, "effect": float(scores[0] - scores[week + 1])} for week in range(WEEKS)]
+    logits = network.logits(rows_v, rows_m)
+    return [{"week": week, "effect": float(logits[0] - logits[week + 1])} for week in range(WEEKS)]
 
 
 # ---------------------------------------------------------------------------
