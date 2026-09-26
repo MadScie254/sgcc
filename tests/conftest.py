@@ -17,7 +17,7 @@ os.environ.setdefault("SGCC_STATE_DIR", tempfile.mkdtemp(prefix="sgcc-state-"))
 
 @pytest.fixture(scope="session")
 def demo_dataset_path() -> Path:
-    """The held-out customer sample the API serves (committed to the repo)."""
+    """The unlabelled operational population the API scores (committed to the repo)."""
     assert DEMO_DATASET.is_file(), "data/sgcc_demo.csv.gz is missing; run python -m src.train"
     return DEMO_DATASET
 

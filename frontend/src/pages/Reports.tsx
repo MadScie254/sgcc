@@ -1,9 +1,11 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileDown, FileUp, Sparkles } from "lucide-react";
+import { Download, FileDown, FileUp, FlaskConical, Sparkles, Trash2 } from "lucide-react";
 import {
   createAndDownloadReport,
+  deleteDataset,
+  deleteReport,
   downloadBatchScores,
   downloadReport,
   getDatasets,
@@ -11,14 +13,17 @@ import {
   getModelMetrics,
   getReports,
   predictCustomer,
+  promotePopulation,
+  resetPopulation,
   uploadDataset,
   type Dataset,
   type ReportKind,
 } from "@/lib/api";
 import { fmtDateTime, fmtInt, fmtNum, fmtPct } from "@/lib/format";
+import { useIsSupervisor } from "@/lib/me";
 import { ApiError, Button, Card, CardHeader, Empty, ErrorState, PageHeader, Skeleton, TierBadge } from "@/components/ui";
 
-const KIND_LABEL: Record<ReportKind, string> = { portfolio: "Portfolio", dataset: "Dataset", case: "Case file" };
+const KIND_LABEL: Record<ReportKind, string> = { portfolio: "Portfolio", dataset: "Dataset", case: "Case file", research: "Research evaluation" };
 
 function FilePicker({ id, label, onPick, busy }: { id: string; label: string; onPick: (file: File) => void; busy?: boolean }) {
   const input = useRef<HTMLInputElement>(null);
@@ -50,7 +55,7 @@ function DatasetResult({ dataset }: { dataset: Dataset }) {
       <p className="m-0 text-[13px] text-ink-2">
         <span className="font-medium text-ink">{dataset.filename}</span> · {s.format === "consumption"
           ? `SGCC meter data, ${fmtInt(s.days)} days per customer; features built by the pipeline`
-          : `feature rows, ${s.features_found} of ${s.features_expected} model features present`} · scored at τ {s.threshold.toFixed(3)}
+          : `feature rows with all ${s.features_expected} model features`} · uploaded by {dataset.uploaded_by} · scored at τ {s.threshold.toFixed(3)}
       </p>
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         <Figure label="Customers" value={fmtInt(s.customers)} />
@@ -66,9 +71,6 @@ function DatasetResult({ dataset }: { dataset: Dataset }) {
           <Figure label="PR-AUC" value={fmtNum(lm.pr_auc)} />
         </div>
       ) : <p className="m-0 text-[13px] text-ink-3">No FLAG column, so there is no ground truth to check the scores against.</p>}
-      {s.format === "features" && s.features_found < s.features_expected ? (
-        <p className="m-0 text-[13px] text-amber-ink">{s.features_expected - s.features_found} model features were absent and treated as missing readings.</p>
-      ) : null}
       <table className="w-full border-collapse text-left text-[13px]">
         <caption className="pb-2 text-left text-xs text-ink-3">Highest-risk customers in the file</caption>
         <thead>
@@ -93,6 +95,7 @@ function DatasetResult({ dataset }: { dataset: Dataset }) {
 
 export function ReportsPage() {
   const queryClient = useQueryClient();
+  const supervisor = useIsSupervisor();
   const [customerId, setCustomerId] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const health = useQuery({ queryKey: ["health"], queryFn: getHealth, retry: false });
@@ -102,6 +105,14 @@ export function ReportsPage() {
 
   const refreshReports = () => queryClient.invalidateQueries({ queryKey: ["reports"] });
   const portfolio = useMutation({ mutationFn: () => createAndDownloadReport({ kind: "portfolio" }), onSettled: refreshReports });
+  const research = useMutation({ mutationFn: () => createAndDownloadReport({ kind: "research" }), onSettled: refreshReports });
+  const removeReport = useMutation({ mutationFn: deleteReport, onSettled: refreshReports });
+  const removeDataset = useMutation({
+    mutationFn: deleteDataset,
+    onSuccess: () => { setSelectedId(null); void queryClient.invalidateQueries({ queryKey: ["datasets"] }); },
+  });
+  const promote = useMutation({ mutationFn: promotePopulation, onSuccess: () => queryClient.invalidateQueries() });
+  const reset = useMutation({ mutationFn: resetPopulation, onSuccess: () => queryClient.invalidateQueries() });
   const datasetReport = useMutation({ mutationFn: (id: string) => createAndDownloadReport({ kind: "dataset", dataset_id: id }), onSettled: refreshReports });
   const download = useMutation({ mutationFn: downloadReport });
   const upload = useMutation({
@@ -115,6 +126,7 @@ export function ReportsPage() {
   const score = useMutation({ mutationFn: predictCustomer });
 
   const reportsOff = health.data && !health.data.reports.available ? health.data.reports.detail : null;
+  const population = metrics.data?.population;
   const selected = datasets.data?.find((d) => d.dataset_id === selectedId) ?? (selectedId === upload.data?.dataset_id ? upload.data : undefined);
 
   const submit = (event: FormEvent) => {
@@ -130,15 +142,24 @@ export function ReportsPage() {
       {reportsOff ? <ErrorState title="PDF reports are unavailable on this server" message={reportsOff} /> : null}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_1.2fr]">
-        <Card label="Portfolio report" className="flex flex-col gap-4 p-[22px]">
-          <CardHeader title="Portfolio report" subtitle="The served population at the threshold in service: model quality, risk tiers, the case workflow and the top flagged customers with their reasons." />
-          <Button variant="primary" className="self-start" disabled={Boolean(reportsOff)} busy={portfolio.isPending} onClick={() => portfolio.mutate()}>
-            {!portfolio.isPending ? <FileDown className="h-4 w-4" aria-hidden /> : null}Generate and download PDF
-          </Button>
-          {portfolio.isSuccess ? <p role="status" className="m-0 text-[13px] text-cobalt-ink">{portfolio.data.report_id}.pdf downloaded.</p> : null}
-          {portfolio.isError ? <ApiError title="Could not produce the portfolio report" error={portfolio.error} /> : null}
-          <p className="m-0 mt-auto text-[13px] text-ink-3">Case-file reports are on each customer's case page.</p>
-        </Card>
+        <div className="flex flex-col gap-4">
+          <Card label="Portfolio report" className="flex flex-col gap-4 p-[22px]">
+            <CardHeader title="Portfolio report" subtitle="Operations: the population in service at the threshold in service, expected thefts, the case workflow and the top flagged customers with their reasons. No test-set figures." />
+            <Button variant="primary" className="self-start" disabled={Boolean(reportsOff)} busy={portfolio.isPending} onClick={() => portfolio.mutate()}>
+              {!portfolio.isPending ? <FileDown className="h-4 w-4" aria-hidden /> : null}Generate and download PDF
+            </Button>
+            {portfolio.isSuccess ? <p role="status" className="m-0 text-[13px] text-cobalt-ink">{portfolio.data.report_id}.pdf downloaded.</p> : null}
+            {portfolio.isError ? <ApiError title="Could not produce the portfolio report" error={portfolio.error} /> : null}
+            <p className="m-0 text-[13px] text-ink-3">Case-file reports are on each customer's case page.</p>
+          </Card>
+          <Card label="Research report" className="flex flex-col gap-4 p-[22px]">
+            <CardHeader title="Research evaluation report" subtitle="The study record: test-set metrics of every pipeline with bootstrap intervals, significance tests and calibration." />
+            <Button variant="secondary" className="self-start" disabled={Boolean(reportsOff)} busy={research.isPending} onClick={() => research.mutate()}>
+              {!research.isPending ? <FlaskConical className="h-4 w-4" aria-hidden /> : null}Generate and download PDF
+            </Button>
+            {research.isError ? <ApiError title="Could not produce the research report" error={research.error} /> : null}
+          </Card>
+        </div>
 
         <Card label="Report archive" className="flex flex-col gap-3 p-[22px]">
           <CardHeader title="Report archive" subtitle="Every report generated on this server, newest first." />
@@ -148,33 +169,65 @@ export function ReportsPage() {
                 <li key={r.report_id} className="flex items-center justify-between gap-3 border-b border-line-soft py-2.5 text-[13px]">
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate font-medium">{KIND_LABEL[r.kind]} · <span className="font-normal text-ink-2">{r.subject}</span></span>
-                    <span className="text-xs text-ink-3">{fmtDateTime(r.created_at)} · {fmtInt(Math.ceil(r.bytes / 1024))} KB</span>
+                    <span className="text-xs text-ink-3">{fmtDateTime(r.created_at)} · {r.created_by} · {fmtInt(Math.ceil(r.bytes / 1024))} KB</span>
                   </span>
-                  <Button variant="ghost" aria-label={`Download ${r.report_id}`} busy={download.isPending && download.variables === r.report_id} onClick={() => download.mutate(r.report_id)}>
-                    <Download className="h-4 w-4" aria-hidden />PDF
-                  </Button>
+                  <span className="flex shrink-0 gap-1">
+                    <Button variant="ghost" aria-label={`Download ${r.report_id}`} busy={download.isPending && download.variables === r.report_id} onClick={() => download.mutate(r.report_id)}>
+                      <Download className="h-4 w-4" aria-hidden />PDF
+                    </Button>
+                    {supervisor ? (
+                      <Button variant="ghost" aria-label={`Delete ${r.report_id}`} busy={removeReport.isPending && removeReport.variables === r.report_id}
+                        onClick={() => { if (window.confirm(`Delete ${r.report_id}? This cannot be undone.`)) removeReport.mutate(r.report_id); }}>
+                        <Trash2 className="h-4 w-4" aria-hidden />
+                      </Button>
+                    ) : null}
+                  </span>
                 </li>
               ))}
             </ul>
           ) : reports.isLoading ? <Skeleton className="h-32" /> : reports.isError ? <ApiError error={reports.error} /> : <Empty title="No reports yet" message="Generate one here, or from a case file." />}
           {download.isError ? <ApiError title="Download failed" error={download.error} /> : null}
+          {removeReport.isError ? <ApiError title="Could not delete" error={removeReport.error} /> : null}
         </Card>
       </div>
 
       <Card label="Check a dataset" className="flex flex-col gap-4 p-[22px]">
         <CardHeader title="Check a dataset"
-          subtitle="Upload SGCC meter data (CONS_NO, optional FLAG, one column per day) or rows of model features. The model scores every customer; with a FLAG column you also see how many thefts it catches."
+          subtitle="Upload SGCC meter data (CONS_NO, optional FLAG, one column per day, dates written year first) or rows with every model feature. The model scores every customer; with a FLAG column you also see how many thefts it catches. A supervisor can make a meter-data upload the population the console scores."
           action={<FilePicker id="dataset-file" label="Upload CSV" busy={upload.isPending} onPick={(file) => upload.mutate(file)} />} />
         {upload.isError ? <ApiError title="Upload rejected" error={upload.error} /> : null}
+        {population ? (
+          <p className="m-0 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
+            Population in service: <span className="font-medium text-ink">{population.source === "sample" ? "the SGCC sample shipped with the model" : population.filename}</span>
+            {population.promoted_by ? <span className="text-ink-3">· promoted by {population.promoted_by} {fmtDateTime(population.promoted_at)}</span> : null}
+            {supervisor && population.source === "upload" ? (
+              <Button variant="ghost" busy={reset.isPending} onClick={() => reset.mutate()}>Return to the sample</Button>
+            ) : null}
+          </p>
+        ) : null}
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.6fr_1fr]">
           <div className="flex flex-col gap-3">
             {selected ? (
               <>
                 <DatasetResult dataset={selected} />
-                <Button variant="primary" className="self-start" disabled={Boolean(reportsOff)} busy={datasetReport.isPending} onClick={() => datasetReport.mutate(selected.dataset_id)}>
-                  {!datasetReport.isPending ? <FileDown className="h-4 w-4" aria-hidden /> : null}Dataset report (PDF)
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="primary" disabled={Boolean(reportsOff)} busy={datasetReport.isPending} onClick={() => datasetReport.mutate(selected.dataset_id)}>
+                    {!datasetReport.isPending ? <FileDown className="h-4 w-4" aria-hidden /> : null}Dataset report (PDF)
+                  </Button>
+                  {supervisor && selected.summary.format === "consumption" && population?.id !== selected.dataset_id ? (
+                    <Button variant="secondary" busy={promote.isPending} onClick={() => promote.mutate(selected.dataset_id)}>Score these customers in the console</Button>
+                  ) : null}
+                  {supervisor && population?.id !== selected.dataset_id ? (
+                    <Button variant="ghost" busy={removeDataset.isPending}
+                      onClick={() => { if (window.confirm(`Delete ${selected.filename}? This cannot be undone.`)) removeDataset.mutate(selected.dataset_id); }}>
+                      <Trash2 className="h-4 w-4" aria-hidden />Delete
+                    </Button>
+                  ) : null}
+                </div>
+                {promote.isSuccess ? <p role="status" className="m-0 text-[13px] text-cobalt-ink">The console now scores {selected.filename}.</p> : null}
                 {datasetReport.isError ? <ApiError title="Could not produce the dataset report" error={datasetReport.error} /> : null}
+                {promote.isError ? <ApiError title="Could not switch the population" error={promote.error} /> : null}
+                {removeDataset.isError ? <ApiError title="Could not delete" error={removeDataset.error} /> : null}
               </>
             ) : <Empty title="No dataset selected" message="Upload a CSV, or pick an earlier upload." />}
           </div>
@@ -187,7 +240,7 @@ export function ReportsPage() {
                     <button type="button" aria-pressed={d.dataset_id === selectedId} onClick={() => setSelectedId(d.dataset_id)}
                       className={`flex w-full flex-col gap-0.5 border-t border-line-soft px-2 py-2 text-left hover:bg-tint ${d.dataset_id === selectedId ? "bg-cobalt-soft" : ""}`}>
                       <span className="truncate font-medium">{d.filename}</span>
-                      <span className="text-xs text-ink-3">{fmtDateTime(d.uploaded_at)} · {fmtInt(d.summary.customers)} customers · {fmtInt(d.summary.flagged)} flagged</span>
+                      <span className="text-xs text-ink-3">{fmtDateTime(d.uploaded_at)} · {d.uploaded_by} · {fmtInt(d.summary.customers)} customers · {fmtInt(d.summary.flagged)} flagged</span>
                     </button>
                   </li>
                 ))}
@@ -199,7 +252,7 @@ export function ReportsPage() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card label="Score a customer" className="flex flex-col gap-4 p-[22px]">
-          <CardHeader title="Score a customer" subtitle={`A served customer, at the threshold in service (τ ${metrics.data ? metrics.data.threshold.toFixed(3) : "…"}).`} />
+          <CardHeader title="Score a customer" subtitle={`A customer of the population in service, at the threshold in service (τ ${metrics.data ? metrics.data.threshold.toFixed(3) : "…"}).`} />
           <form onSubmit={submit} className="flex gap-2.5">
             <label htmlFor="score-id" className="sr-only">Customer ID</label>
             <input id="score-id" value={customerId} onChange={(e) => setCustomerId(e.target.value)} placeholder="Customer ID" maxLength={64}

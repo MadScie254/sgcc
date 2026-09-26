@@ -2,13 +2,15 @@
 Regenerate the thesis result figures from the trained pipeline and the full dataset.
 
     python scripts/download_data.py          # once: data/sgcc_full.csv
-    python -m src.train                      # model + artifacts
-    python scripts/significance.py           # optional: fold-wise comparison figure
+    python -m src.train                      # model, artifacts and saved predictions
+    python scripts/significance.py           # bootstrap intervals and tests (figure 5.16)
     python scripts/make_thesis_figures.py    # writes docs/thesis-figures/*.png and *.pdf
 
-Rebuilds the exact 70/15/15 customer split used in training, refits every
-candidate pipeline of src.experiment with the tuned settings (deterministic), and
-plots results on the untouched test customers.
+Every test-set figure uses the predictions training saved
+(artifacts/predictions/test.csv.gz): the test customers were scored once, and
+nothing is refitted here, so no GPU is needed. The full dataset is read again only
+for the data figures (3.2, 3.3), the SHAP plots of the served model and the PCA view
+of SMOTE+ENN.
 """
 
 import json
@@ -32,9 +34,10 @@ from sklearn.metrics import average_precision_score, confusion_matrix, precision
 from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 from src.data_loader import load_wide  # noqa: E402
-from src.experiment import CANDIDATES, fit_candidate  # noqa: E402
+from src.experiment import CANDIDATES  # noqa: E402
 from src.feature_catalog import feature_label  # noqa: E402
-from src.pipeline import features_for  # noqa: E402
+from src.modeling import load_model  # noqa: E402
+from src.pipeline import features_for, model_input  # noqa: E402
 from src.resampling import Treatment  # noqa: E402
 from src.train import load_config, split_customers  # noqa: E402
 
@@ -82,30 +85,29 @@ def main() -> None:
         sys.exit("data/sgcc_full.csv not found: run python scripts/download_data.py first")
     artifacts = ROOT / config["paths"]["artifacts"]
     read = lambda name: json.loads((artifacts / name).read_text())  # noqa: E731
-    metrics, tuning, curves, resampling = read("metrics.json"), read("tuning.json"), read("learning_curves.json"), read("resampling.json")
+    spec, tuning, curves, resampling = read("pipeline.json"), read("tuning.json"), read("learning_curves.json"), read("resampling.json")
+    calibration = read("calibration.json")
     comparison = json.loads((ROOT / config["paths"]["models"] / "baselines" / "comparison_results.json").read_text())
     eval_cfg, random_state = config["evaluation"], int(config["random_state"])
 
     wide, labels = load_wide(str(data_path))
     y = labels.reindex(wide.index).astype(int)
-    X_by = {prep: features_for(wide, prep, config.get("preprocessing"), config.get("features")) for prep in ("raw", "clean")}
-    train_idx, val_idx, test_idx = split_customers(y, float(eval_cfg["validation_size"]), float(eval_cfg["test_size"]), random_state)
-    yt = y.loc[test_idx].to_numpy()
-    base_rate = yt.mean()
+    X_by = {prep: features_for(wide, prep, config.get("preprocessing"), spec["feature_config"]) for prep in ("raw", "clean")}
+    train_idx, _, test_idx = split_customers(y, float(eval_cfg["validation_size"]), float(eval_cfg["test_size"]), random_state)
 
-    fitted, scores = {}, {}
-    for name, spec in CANDIDATES.items():
-        X = X_by[spec["preprocessing"]]
-        fitted[name] = fit_candidate(name, X.loc[train_idx], y.loc[train_idx], params=tuning.get(name, {}).get("params"),
-                                     X_val=X.loc[val_idx], y_val=y.loc[val_idx], resampling_config=config.get("resampling"),
-                                     early_stopping_rounds=int(eval_cfg["early_stopping_rounds"]), random_state=random_state)
-        scores[name] = fitted[name].predict(X.loc[test_idx])
-        print(f"{name}: test PR-AUC {average_precision_score(yt, scores[name]):.4f}")
-    served = metrics["pipeline"]
-    threshold = float(metrics["threshold"])
+    # The saved test predictions (calibrated probabilities), in the order of the split.
+    test = pd.read_csv(artifacts / "predictions" / "test.csv.gz", dtype={"customer_id": str}).set_index("customer_id").loc[test_idx]
+    yt = test["label"].to_numpy()
+    assert (yt == y.loc[test_idx].to_numpy()).all(), "saved predictions do not match the training split"
+    base_rate = yt.mean()
+    scores = {name: test[name].to_numpy() for name in CANDIDATES}
+    for name, p in scores.items():
+        print(f"{name}: test PR-AUC {average_precision_score(yt, p):.4f}")
+    served = spec["name"]
+    threshold = float(spec["threshold"])
     p_served = scores[served]
-    X_served = fitted[served].treatment.transform(X_by[CANDIDATES[served]["preprocessing"]].loc[test_idx])
-    label = {name: spec["label"] for name, spec in CANDIDATES.items()}
+    X_served = model_input(wide.loc[test_idx], spec, spec["feature_config"])[spec["features"]]
+    label = {name: s_["label"] for name, s_ in CANDIDATES.items()}
 
     # 5.1 ROC and 5.2 precision-recall, every candidate
     fig, ax = plt.subplots(figsize=(5.6, 4.8))
@@ -160,13 +162,13 @@ def main() -> None:
     ax.plot(ts, rec, color=ORANGE, label="Recall (thefts caught)")
     ax.axvline(threshold, color=INK, lw=1, ls="--")
     ax.text(threshold + 0.01, 0.04, f"τ = {threshold:.3f}\n(max F1 on validation)", color=INK, fontsize=8.5)
-    ax.set(xlabel="Decision threshold τ", ylabel="Rate", xlim=(0, 1), ylim=(0, 1.02),
+    ax.set(xlabel="Decision threshold τ (calibrated probability)", ylabel="Rate", xlim=(0, 1), ylim=(0, 1.02),
            title="Precision and recall across thresholds, test customers")
     ax.legend(loc="center right")
     save(fig, "fig-5-4-threshold-tradeoff")
 
-    # 5.5 Mean |SHAP| top 15 and 5.8 SHAP summary (top 20) on the test set
-    model = fitted[served].model
+    # 5.5 Mean |SHAP| top 15 and 5.8 SHAP summary (top 20) on the test set, raw score of the served model
+    model = load_model(str(ROOT / config["paths"]["model_file"]))
     sample = X_served.sample(n=min(2000, len(X_served)), random_state=0)
     sv = np.asarray(shap.TreeExplainer(model).shap_values(sample))
     mean_abs = pd.Series(np.abs(sv).mean(axis=0), index=sample.columns).sort_values().tail(15)
@@ -259,7 +261,7 @@ def main() -> None:
     # 5.13 Accuracy paradox (RQ1): accuracy hides missed thefts
     all_honest = {"accuracy": 1 - base_rate, "recall": 0.0, "f1": 0.0}
     default_05 = comparison["xgboost_default"]["at_threshold_0_5"]
-    rows = [("Flag nobody", all_honest), ("XGBoost, defaults,\nτ = 0.5", default_05), (f"{label[served]},\nτ = {threshold:.3f}", comparison[served])]
+    rows = [("Flag nobody", all_honest), ("XGBoost, defaults,\np ≥ 0.5", default_05), (f"{label[served]},\nτ = {threshold:.3f}", comparison[served])]
     fig, ax = plt.subplots(figsize=(7.6, 4))
     x = np.arange(len(rows))
     for offset, key, color, name in ((-0.27, "accuracy", INK2, "Accuracy"), (0, "recall", ORANGE, "Recall"), (0.27, "f1", BLUE, "F1")):
@@ -288,35 +290,71 @@ def main() -> None:
         trials = np.array(tuning[name]["trials"])
         ax.plot(np.arange(1, len(trials) + 1), trials, "o", ms=4, color=COLORS[name], alpha=0.45)
         ax.plot(np.arange(1, len(trials) + 1), np.maximum.accumulate(trials), color=COLORS[name], label=f"{label[name]} (best {trials.max():.3f})")
-    ax.set(xlabel="Optuna trial", ylabel="Cross-validated PR-AUC", title="Hyperparameter search (5-fold CV on training customers)")
+    ax.set(xlabel="Optuna trial", ylabel="Mean PR-AUC over 5 folds", title="Hyperparameter search (5-fold CV on training customers)")
     ax.legend(fontsize=8.5, title="line: best so far · dots: each trial", title_fontsize=8,
               loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2)
     save(fig, "fig-5-15-tuning-history")
 
-    # 5.16 Fold-wise comparison (significance.py)
+    # 5.16 Paired bootstrap on the test customers (significance.py): difference from the proposed pipeline
     significance_path = artifacts / "significance.json"
     if significance_path.exists():
         sig = json.loads(significance_path.read_text())
-        fig, axes = plt.subplots(1, 3, figsize=(13, 4.3))
-        for ax, metric, name_ in zip(axes, ("pr_auc", "f1", "recall"), ("PR-AUC", "F1", "Recall")):
-            for k, name in enumerate(CANDIDATES):
-                vals = np.array(sig["per_fold"][name][metric])
-                jitter = np.random.default_rng(k).uniform(-0.12, 0.12, len(vals))
-                ax.scatter(np.full(len(vals), k) + jitter, vals, s=16, color=COLORS[name], alpha=0.75, edgecolors=SURFACE, linewidths=0.5)
-                ax.hlines(vals.mean(), k - 0.28, k + 0.28, color=INK, lw=2)
-                ax.text(k, vals.max() + 0.01, f"{vals.mean():.3f}", ha="center", fontsize=7.5, color=INK2)
-            ax.set(title=f"{name_}, {sig['folds']} folds", xticks=np.arange(len(CANDIDATES)))
-            ax.set_xticklabels([wrap(label[n], 12) for n in CANDIDATES], fontsize=6.5)
-        fig.suptitle("10-fold cross-validation: each dot a fold, bar the mean (paired tests in artifacts/significance.json)",
-                     fontweight="bold", fontsize=10.5)
-        save(fig, "fig-5-16-fold-comparison")
+        others = [n for n in CANDIDATES if n != sig["reference"]]
+        fig, axes = plt.subplots(1, 3, figsize=(13, 3.9), sharey=True)
+        for ax, metric, name_ in zip(axes, ("pr_auc", "f1", "mcc"), ("PR-AUC", "F1", "MCC")):
+            for k, name in enumerate(others):
+                row = sig["comparisons"][name][metric]
+                ax.errorbar(row["difference"], k, xerr=[[row["difference"] - row["ci_low"]], [row["ci_high"] - row["difference"]]],
+                            fmt="o", color=COLORS[name], ecolor=COLORS[name], elinewidth=2, capsize=4, ms=7)
+                ax.text(row["ci_high"], k + 0.22, f"  p = {row['p_holm']:.3g}{' *' if row['significant'] else ''}", fontsize=7.5, color=INK2)
+            ax.axvline(0, color=INK, lw=1, ls="--")
+            ax.set(title=f"{name_}: proposed minus other", xlabel="Difference (95% bootstrap interval)")
+            ax.grid(axis="y", visible=False)
+        axes[0].set(yticks=np.arange(len(others)), ylim=(-0.6, len(others) - 0.3))
+        axes[0].set_yticklabels([wrap(label[n], 22) for n in others], fontsize=8)
+        axes[0].invert_yaxis()
+        fig.suptitle(f"Paired stratified bootstrap on the {sig['population']['customers']:,} test customers "
+                     f"({sig['resamples']:,} resamples; Holm-adjusted p, * p < 0.05). Right of 0: the proposed pipeline is better.",
+                     fontweight="bold", fontsize=10)
+        save(fig, "fig-5-16-bootstrap-comparison")
+
+    # 5.17 Reliability diagram: raw scores and Platt-calibrated probabilities, test customers
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
+    for ax, name in zip(axes, (served, "proposed" if served != "proposed" else "xgboost")):
+        report = calibration["pipelines"][name]
+        for kind, color, text in (("raw", ORANGE, "Raw score"), ("platt", BLUE, "Calibrated (Platt)")):
+            bins = report["reliability_test"][kind]
+            ece = report["test"][kind]["ece"]
+            ax.plot([b["mean_predicted"] for b in bins], [b["observed_rate"] for b in bins], "o-", color=color, ms=5,
+                    label=f"{text}, ECE {ece:.3f}")
+        ax.plot([0, 1], [0, 1], color="#b9b8b2", lw=1, ls="--", label="Perfect calibration")
+        ax.set(title=f"{label[name]}{' (served)' if name == served else ''}", xlabel="Predicted probability", xlim=(0, 1), ylim=(0, 1))
+        ax.legend(fontsize=8, loc="upper left")
+    axes[0].set_ylabel("Observed theft rate")
+    fig.suptitle("Calibration on the test customers (Platt scaling fitted on validation customers)", fontweight="bold", fontsize=11)
+    save(fig, "fig-5-17-reliability")
+
+    # 5.18 Inspection workload against thefts found, every pipeline (cumulative gains on the test customers)
+    fig, ax = plt.subplots(figsize=(6.4, 4.6))
+    share = np.arange(1, len(yt) + 1) / len(yt)
+    for name, p in scores.items():
+        found = np.cumsum(yt[np.argsort(-p, kind="mergesort")]) / yt.sum()
+        ax.plot(share, found, color=COLORS[name], lw=1.8, label=label[name])
+    flagged = (p_served >= threshold).mean()
+    ax.plot([0, 1], [0, 1], color="#b9b8b2", lw=1, ls="--", label="Random inspection")
+    ax.axvline(flagged, color=INK, lw=1, ls=":")
+    ax.text(flagged + 0.01, 0.05, f"served τ: inspect {flagged:.1%},\nfind {(p_served >= threshold)[yt == 1].mean():.1%} of thefts", fontsize=8, color=INK)
+    ax.set(xlabel="Share of customers inspected (highest probability first)", ylabel="Share of thefts found", xlim=(0, 1), ylim=(0, 1.01),
+           title="Inspection workload against thefts found, test customers")
+    ax.legend(fontsize=7.5, loc="lower right")
+    save(fig, "fig-5-18-workload")
 
     # 3.2 Example consumption: one honest and one theft customer (monthly means)
     rng = np.random.default_rng(7)
     X_test = X_by["raw"].loc[test_idx]
     miss_test, last_obs = X_test["missing_ratio"].to_numpy(), X_test["last_obs_frac"].to_numpy()
-    honest_id = rng.choice(test_idx[(yt == 0) & (p_served < 0.05) & (miss_test < 0.02)])
-    silent = (yt == 1) & (p_served > 0.9) & (last_obs < 0.7) & (miss_test < 0.7)
+    honest_id = rng.choice(test_idx[(yt == 0) & (p_served <= np.quantile(p_served, 0.3)) & (miss_test < 0.02)])
+    silent = (yt == 1) & (p_served >= np.quantile(p_served, 0.98)) & (last_obs < 0.7) & (miss_test < 0.7)
     theft_id = test_idx[silent][np.argmax(p_served[silent])] if silent.any() else test_idx[(yt == 1)][np.argmax(p_served[yt == 1])]
     fig, axes = plt.subplots(2, 1, figsize=(7.2, 4.6), sharex=True)
     for ax, cid, name, color in ((axes[0], honest_id, "Honest customer", BLUE), (axes[1], theft_id, "Theft customer", ORANGE)):

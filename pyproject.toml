@@ -23,7 +23,12 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pyyaml>=6.0",
     "fpdf2>=2.7.8",
+    # State: PostgreSQL (SQLite without DATABASE_URL) and S3-compatible object storage
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "boto3>=1.34",
     # Tests
+    "moto[s3]>=5.0",
     "pytest>=8.0",
     "httpx2>=2.0",
 ]

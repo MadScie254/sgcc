@@ -9,6 +9,21 @@ on:
 jobs:
   backend-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gridsentinel
+          POSTGRES_PASSWORD: gridsentinel
+          POSTGRES_DB: gridsentinel
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U gridsentinel" --health-interval 5s --health-timeout 5s --health-retries 10
 
     steps:
       - uses: actions/checkout@v7
@@ -26,6 +41,8 @@ jobs:
           pip install -r requirements.lock
 
       - name: Run tests
+        env:
+          DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql://gridsentinel:gridsentinel@127.0.0.1:5432/gridsentinel' || '' }}
         run: pytest tests/ -v
 
   api-smoke-test:
@@ -47,15 +64,16 @@ jobs:
           pip install -r requirements.lock
 
       - name: Start API
-        env:
-          ENV: production
-          API_KEY: ci-smoke-key
         run: |
+          SUPERVISOR=$(python -c "import hashlib; print(hashlib.sha256(b'ci-supervisor-key').hexdigest())")
+          ANALYST=$(python -c "import hashlib; print(hashlib.sha256(b'ci-analyst-key').hexdigest())")
+          export ENV=production
+          export API_KEYS="[{\"name\": \"ci-supervisor\", \"role\": \"supervisor\", \"sha256\": \"$SUPERVISOR\"}, {\"name\": \"ci-analyst\", \"role\": \"analyst\", \"sha256\": \"$ANALYST\"}]"
           uvicorn backend.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
 
       - name: Wait for API health
         run: |
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 90); do
             code=$(curl -s -o health.json -w "%{http_code}" http://127.0.0.1:8000/api/health || true)
             if [ "$code" = "200" ]; then
               python -c "import json, sys; sys.exit(0 if json.load(open('health.json'))['model_loaded'] else 1)"
@@ -63,17 +81,19 @@ jobs:
             fi
             sleep 1
           done
-          echo "API did not become healthy within 60 seconds."
+          echo "API did not become healthy within 90 seconds."
+          cat health.json || true
           exit 1
 
-      - name: Smoke test secured endpoints
+      - name: Smoke test keys and roles
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/customers)" = "401"
-          curl -fsS -H "X-API-Key: ci-smoke-key" http://127.0.0.1:8000/api/customers >/dev/null
-          curl -fsS -H "X-API-Key: ci-smoke-key" http://127.0.0.1:8000/api/model/metrics >/dev/null
+          curl -fsS -H "X-API-Key: ci-analyst-key" http://127.0.0.1:8000/api/customers >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' -H 'X-API-Key: ci-analyst-key' -d '{"threshold": null}' http://127.0.0.1:8000/api/model/threshold)" = "403"
+          curl -fsS -H "X-API-Key: ci-analyst-key" http://127.0.0.1:8000/api/research/evaluation >/dev/null
 
       - name: Evaluate the served model through the API
-        run: python scripts/evaluate_api.py --url http://127.0.0.1:8000 --key ci-smoke-key
+        run: python scripts/evaluate_api.py --url http://127.0.0.1:8000 --key ci-supervisor-key
 
       - name: Show API log on failure
         if: failure()
@@ -103,3 +123,48 @@ jobs:
       - name: Lint frontend
         working-directory: frontend
         run: npm run lint
+
+  e2e-test:
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install API dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the console
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          npx playwright install --with-deps chromium
+
+      # playwright.config.ts starts the API (production mode, named keys, fresh state) and serves the build.
+      - name: End-to-end tests
+        working-directory: frontend
+        run: npm run e2e
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report

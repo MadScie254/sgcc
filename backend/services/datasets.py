@@ -2,10 +2,14 @@
 
 Two upload formats are accepted:
 - consumption: SGCC layout, a customer id column (CONS_NO / CUSTOMER_ID /
-  customer_id), an optional FLAG/label column and one column per date. Features
-  are built exactly as in training.
-- features: one row per customer with model feature columns (at least half of
-  them), an optional id column and an optional label column.
+  customer_id), an optional FLAG/label column and one column per date written
+  year first. Features are built exactly as in training.
+- features: one row per customer with every model feature, an optional id column
+  and an optional label column.
+
+Repeated customer ids, ambiguous dates and missing features are rejected with the
+reason. The catalogue is in the database and the files in the blob store. A
+consumption upload can be promoted to the operational population.
 """
 
 from __future__ import annotations
@@ -15,29 +19,27 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from threading import Lock
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 from fastapi import UploadFile
 from sklearn.metrics import average_precision_score, roc_auc_score
+from sqlalchemy import delete, insert, select
 
 from src.data_loader import ID_COLUMNS, LABEL_COLUMNS, frame_to_wide, is_consumption_frame
 
-from .config import get_paths
-from .data import build_model_input
+from . import db
+from .blobstore import get_blobstore
+from .data import active_population, build_model_input
 from .errors import NotFoundError
-from .model import get_decision_threshold, get_feature_names, predict_proba, risk_tier
-from .storage import read_json, write_json
+from .model import FeatureInputError, get_decision_threshold, get_feature_names, predict_proba, require_features, risk_tier
 
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
 MAX_ROWS = 200_000
 MAX_COLUMNS = 2_000
-MAX_DATASETS = 100  # older uploads are deleted
 _ID_PATTERN = re.compile(r"[0-9]{14}-[0-9a-f]{8}")
-_CATALOG_LOCK = Lock()
 
 
 class DatasetError(ValueError):
@@ -46,6 +48,10 @@ class DatasetError(ValueError):
 
 class UploadTooLargeError(DatasetError):
     pass
+
+
+class DatasetInUseError(RuntimeError):
+    """The dataset is the operational population and cannot be deleted."""
 
 
 @dataclass
@@ -106,19 +112,24 @@ def score_frame(frame: pd.DataFrame) -> ScoredDataset:
             days=int(wide.shape[1]), features_found=len(get_feature_names()),
         )
 
-    names = get_feature_names()
-    found = [name for name in names if name in frame.columns]
-    if len(found) < len(names) / 2:
+    if not any(name in frame.columns for name in get_feature_names()):
         raise DatasetError(
             "Unrecognised layout. Upload either SGCC meter data (a CONS_NO column, an optional FLAG "
-            "column and one column per date) or model features (one column per feature, "
-            f"at least {len(names) // 2 + 1} of the {len(names)})."
+            "column and one column per date, written year first) or model features (one column per "
+            f"feature, all {len(get_feature_names())} of them)."
         )
+    try:
+        require_features(frame.columns)
+    except FeatureInputError as exc:
+        raise DatasetError(str(exc)) from exc
     id_column = next((c for c in ID_COLUMNS if c in frame.columns), None)
-    ids = frame[id_column].astype(str).tolist() if id_column else [f"row-{i + 1}" for i in range(len(frame))]
+    ids = frame[id_column].astype(str).str.strip().tolist() if id_column else [f"row-{i + 1}" for i in range(len(frame))]
+    repeated = pd.Index(ids)[pd.Index(ids).duplicated()].unique()
+    if len(repeated):
+        raise DatasetError(f"{len(repeated)} customer ids appear more than once: {', '.join(map(str, repeated[:10]))}")
     return ScoredDataset(
         format="features", customer_ids=ids, probabilities=predict_proba(frame),
-        labels=_labels_from(frame), days=None, features_found=len(found),
+        labels=_labels_from(frame), days=None, features_found=len(get_feature_names()),
     )
 
 
@@ -178,53 +189,98 @@ def scores_csv(scored: ScoredDataset, threshold: float) -> str:
 # Catalogue
 # ---------------------------------------------------------------------------
 
-def _uploads_dir():
-    path = get_paths()["uploads"]
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def _blob_key(dataset_id: str) -> str:
+    return f"uploads/{dataset_id}.csv"
 
 
-def _read_catalog() -> List[Dict[str, Any]]:
-    return read_json(_uploads_dir() / "catalog.json", [])
-
-
-def register_upload(filename: str, content: bytes) -> Dict[str, Any]:
+def register_upload(filename: str, content: bytes, actor: str) -> Dict[str, Any]:
     """Score an uploaded CSV, keep the file, and add it to the catalogue."""
     scored = score_frame(parse_csv(content))
     dataset_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    (_uploads_dir() / f"{dataset_id}.csv").write_bytes(content)
+    get_blobstore().put(_blob_key(dataset_id), content, "text/csv")
     item = {
         "dataset_id": dataset_id,
         "filename": (filename or "upload.csv")[:200],
-        "uploaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "uploaded_at": db.now(),
+        "uploaded_by": actor,
         "summary": summarize(scored, get_decision_threshold()),
     }
-    with _CATALOG_LOCK:
-        catalog = [item, *_read_catalog()]
-        for expired in catalog[MAX_DATASETS:]:
-            if _ID_PATTERN.fullmatch(str(expired.get("dataset_id"))):
-                (_uploads_dir() / f"{expired['dataset_id']}.csv").unlink(missing_ok=True)
-        write_json(_uploads_dir() / "catalog.json", catalog[:MAX_DATASETS])
+    with db.transaction() as connection:
+        connection.execute(insert(db.datasets).values(**item, blob_key=_blob_key(dataset_id)))
     return item
 
 
-def list_datasets() -> List[Dict[str, Any]]:
-    with _CATALOG_LOCK:
-        return _read_catalog()
+def _public(row) -> Dict[str, Any]:
+    return {key: row[key] for key in ("dataset_id", "filename", "uploaded_at", "uploaded_by", "summary")}
+
+
+def list_datasets(limit: int = 100) -> List[Dict[str, Any]]:
+    with db.transaction() as connection:
+        rows = connection.execute(select(db.datasets).order_by(db.datasets.c.uploaded_at.desc()).limit(limit)).mappings().all()
+    return [_public(row) for row in rows]
+
+
+def _row(dataset_id: str):
+    if not _ID_PATTERN.fullmatch(dataset_id):
+        raise NotFoundError(f"Unknown dataset_id: {dataset_id}")
+    with db.transaction() as connection:
+        row = connection.execute(select(db.datasets).where(db.datasets.c.dataset_id == dataset_id)).mappings().first()
+    if row is None:
+        raise NotFoundError(f"Unknown dataset_id: {dataset_id}")
+    return row
 
 
 def get_dataset(dataset_id: str) -> Dict[str, Any]:
-    item = next((i for i in list_datasets() if i.get("dataset_id") == dataset_id), None)
-    if item is None:
-        raise NotFoundError(f"Unknown dataset_id: {dataset_id}")
-    return item
+    return _public(_row(dataset_id))
 
 
 def load_dataset(dataset_id: str) -> ScoredDataset:
     """Re-score a stored upload with the model and threshold in service now."""
-    if not _ID_PATTERN.fullmatch(dataset_id):
-        raise NotFoundError(f"Unknown dataset_id: {dataset_id}")
-    path = _uploads_dir() / f"{dataset_id}.csv"
-    if not path.is_file():
-        raise NotFoundError(f"Dataset file missing: {dataset_id}")
-    return score_frame(parse_csv(path.read_bytes()))
+    return score_frame(parse_csv(get_blobstore().get(_row(dataset_id)["blob_key"])))
+
+
+def delete_dataset(dataset_id: str) -> None:
+    row = _row(dataset_id)
+    if active_population()["id"] == dataset_id:
+        raise DatasetInUseError("This dataset is the operational population; switch the population first")
+    get_blobstore().delete(row["blob_key"])
+    with db.transaction() as connection:
+        connection.execute(delete(db.datasets).where(db.datasets.c.dataset_id == dataset_id))
+
+
+def promote_dataset(dataset_id: str, actor: str) -> Dict[str, Any]:
+    """Make an uploaded meter-data file the operational population (its labels, if any, are ignored)."""
+    row = _row(dataset_id)
+    if row["summary"]["format"] != "consumption":
+        raise DatasetError("Only meter-data uploads (one column per day) can become the operational population")
+    db.set_setting("population", {"dataset_id": dataset_id, "filename": row["filename"], "blob_key": row["blob_key"]}, actor)
+    return active_population()
+
+
+def reset_population(actor: str) -> Dict[str, Any]:
+    db.set_setting("population", None, actor)
+    return active_population()
+
+
+def retention_days() -> float:
+    try:
+        return max(float(os.getenv("RETENTION_DAYS", "90")), 0.0)
+    except ValueError:
+        return 90.0
+
+
+def purge_expired_datasets() -> int:
+    """Delete uploads older than RETENTION_DAYS (0 keeps them), except the operational population."""
+    days = retention_days()
+    if not days:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    keep = active_population()["id"]
+    with db.transaction() as connection:
+        expired = connection.execute(select(db.datasets.c.dataset_id, db.datasets.c.blob_key)
+                                     .where(db.datasets.c.uploaded_at < cutoff, db.datasets.c.dataset_id != keep)).all()
+    for dataset_id, blob_key in expired:
+        get_blobstore().delete(blob_key)
+        with db.transaction() as connection:
+            connection.execute(delete(db.datasets).where(db.datasets.c.dataset_id == dataset_id))
+    return len(expired)

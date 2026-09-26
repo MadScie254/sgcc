@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from backend.dependencies.auth import User, current_user
 from backend.schemas import CaseDetail, CaseList, CaseStatus, CaseUpdate
+from backend.services import db
 from backend.services.operations import get_case, list_cases, update_case
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
@@ -22,10 +24,14 @@ def cases(
 
 
 @router.get("/{customer_id}", response_model=CaseDetail)
-def case(customer_id: str):
-    return get_case(customer_id)
+def case(customer_id: str, user: User = Depends(current_user)):
+    return get_case(customer_id, user.role)
 
 
 @router.patch("/{customer_id}", response_model=CaseDetail)
-def patch_case(customer_id: str, payload: CaseUpdate):
-    return update_case(customer_id, status=payload.status, note=payload.note)
+def patch_case(customer_id: str, payload: CaseUpdate, user: User = Depends(current_user)):
+    result = update_case(customer_id, user.name, user.role, status=payload.status, note=payload.note,
+                         reason=payload.reason, evidence=payload.evidence)
+    if payload.status is not None:
+        db.audit(user.name, user.role, "case.status", customer_id, f"{payload.status}: {payload.reason or ''}".strip(": "))
+    return result

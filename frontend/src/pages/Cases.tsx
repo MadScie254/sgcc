@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Search } from "lucide-react";
 import { getCases, type CaseStatus, type Tier } from "@/lib/api";
+import { useDebounced } from "@/lib/debounce";
 import { fmtInt, fmtRelative, shortId } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { ApiError, Button, Card, Empty, PageHeader, Pill, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
@@ -17,10 +18,13 @@ export function CasesPage() {
   const [tier, setTier] = useState<Tier | undefined>(undefined);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  // Search once typing pauses, not on every keystroke.
+  const query = useDebounced(search.trim());
+  const searching = query !== search.trim();
 
   const cases = useQuery({
-    queryKey: ["cases", "list", status, tier, search, page],
-    queryFn: () => getCases({ status, tier, search: search.trim() || undefined, page, page_size: PAGE_SIZE }),
+    queryKey: ["cases", "list", status, tier, query, page],
+    queryFn: () => getCases({ status, tier, search: query || undefined, page, page_size: PAGE_SIZE }),
     placeholderData: keepPreviousData,
   });
   const counts = cases.data?.status_counts;
@@ -63,6 +67,7 @@ export function CasesPage() {
           <span className="sr-only">Filter by customer ID</span>
           <input type="search" value={search} onChange={(e) => reset(() => setSearch(e.target.value))} placeholder="Filter by customer ID"
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-3" />
+          {searching || (cases.isFetching && query) ? <Loader2 className="h-4 w-4 animate-spin text-ink-3" aria-label="Searching" /> : null}
         </label>
       </div>
 
@@ -105,7 +110,10 @@ export function CasesPage() {
                     ) : "—"}
                   </td>
                   <td><StatusBadge status={item.status} /></td>
-                  <td className="pr-[22px] text-xs text-ink-3">{fmtRelative(item.updated_at)}</td>
+                  <td className="pr-[22px] text-xs text-ink-3">
+                    {fmtRelative(item.updated_at)}
+                    {item.updated_by ? <span className="block">{item.updated_by}</span> : null}
+                  </td>
                 </tr>
               ))}
             </tbody>

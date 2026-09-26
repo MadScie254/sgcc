@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, CheckCircle2, FileDown } from "lucide-react";
 import {
   createAndDownloadReport, getCase, getExplanation, getExplanationCheck, getModelMetrics, getTimeseries, updateCase,
-  type CaseStatus, type Reading,
+  type CaseDetail, type CaseStatus, type CaseUpdate, type Reading,
 } from "@/lib/api";
 import { fmtDateTime, fmtInt } from "@/lib/format";
 import { ApiError, Button, Card, CardHeader, Skeleton, StatusBadge, TierBadge } from "@/components/ui";
@@ -29,12 +29,58 @@ function seriesFacts(points: Reading[]) {
   };
 }
 
-const ACTIONS: Array<{ status: CaseStatus; label: string; primary?: boolean }> = [
-  { status: "reviewing", label: "Start review" },
-  { status: "dispatched", label: "Dispatch field inspection", primary: true },
-  { status: "confirmed", label: "Confirm theft" },
-  { status: "cleared", label: "Clear customer" },
-];
+const RESOLVED: CaseStatus[] = ["confirmed", "cleared"];
+
+function actionLabel(from: CaseStatus, to: CaseStatus): string {
+  if (to === "reviewing") return RESOLVED.includes(from) ? "Reopen case" : "Start review";
+  if (to === "dispatched") return "Dispatch field inspection";
+  if (to === "confirmed") return "Confirm theft…";
+  return "Clear customer…";
+}
+
+/** Resolving needs a reason and an evidence reference; reopening needs a reason. */
+function TransitionForm({ to, busy, onSubmit, onCancel }: {
+  to: CaseStatus; busy: boolean; onSubmit: (payload: CaseUpdate) => void; onCancel: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const resolving = RESOLVED.includes(to);
+  const ready = reason.trim() && (!resolving || evidence.trim());
+  return (
+    <Card label="Record the outcome" className="flex flex-col gap-3 p-[22px]">
+      <CardHeader title={resolving ? (to === "confirmed" ? "Confirm theft" : "Clear this customer") : "Reopen the case"}
+        subtitle={resolving ? "Record what the inspection found. The outcome, reason and evidence are kept on the case with your name." : "Say why the case is reopened, e.g. an appeal."} />
+      <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); if (ready) onSubmit({ status: to, reason: reason.trim(), evidence: evidence.trim() || undefined }); }}>
+        <label htmlFor="transition-reason" className="text-[13px] text-ink-2">{resolving ? "Finding" : "Reason"}</label>
+        <textarea id="transition-reason" rows={2} required maxLength={1000} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus
+          placeholder={resolving ? (to === "confirmed" ? "e.g. bypass found at the meter" : "e.g. meter sealed, usage explained by vacancy") : "e.g. customer appealed"}
+          className="resize-none rounded-lg border border-line px-3 py-2.5 text-sm outline-none focus:border-cobalt" />
+        {resolving ? (
+          <>
+            <label htmlFor="transition-evidence" className="text-[13px] text-ink-2">Evidence reference</label>
+            <input id="transition-evidence" required maxLength={500} value={evidence} onChange={(e) => setEvidence(e.target.value)}
+              placeholder="inspection report number, photo id" className="h-11 rounded-lg border border-line px-3 text-sm outline-none focus:border-cobalt" />
+          </>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" variant="primary" disabled={!ready} busy={busy}>
+            {resolving ? `Mark ${to}` : "Reopen"}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
+function Resolution({ resolution }: { resolution: NonNullable<CaseDetail["resolution"]> }) {
+  return (
+    <p role="note" className={`m-0 rounded-lg px-3.5 py-3 text-[13px] ${resolution.outcome === "confirmed" ? "bg-risk-bg text-risk-ink" : "bg-tint text-ink-2"}`}>
+      <strong className="font-medium">{resolution.outcome === "confirmed" ? "Theft confirmed" : "Customer cleared"}</strong> by {resolution.by},{" "}
+      {fmtDateTime(resolution.at)}: {resolution.reason} · evidence {resolution.evidence}
+    </p>
+  );
+}
 
 export function CaseFilePage() {
   const { customerId = "" } = useParams();
@@ -46,14 +92,16 @@ export function CaseFilePage() {
   const series = useQuery({ queryKey: ["timeseries", customerId], queryFn: () => getTimeseries(customerId), enabled: caseQuery.isSuccess });
   const check = useQuery({ queryKey: ["explanation-check", customerId], queryFn: () => getExplanationCheck(customerId), enabled: explanation.isSuccess });
   const [note, setNote] = useState("");
+  const [pending, setPending] = useState<CaseStatus | null>(null);
 
   useEffect(() => { setNote(caseQuery.data?.note ?? ""); }, [caseQuery.data?.note]);
 
   const save = useMutation({
-    mutationFn: (payload: { status?: CaseStatus; note?: string }) => updateCase(customerId, payload),
+    mutationFn: (payload: CaseUpdate) => updateCase(customerId, payload),
     onSuccess: (data) => {
       queryClient.setQueryData(["case", customerId], data);
       queryClient.invalidateQueries({ queryKey: ["cases"] });
+      setPending(null);
     },
   });
 
@@ -102,14 +150,26 @@ export function CaseFilePage() {
           <Button variant="ghost" disabled={!c} busy={report.isPending} onClick={() => report.mutate()}>
             <FileDown className="h-4 w-4" aria-hidden />Case report (PDF)
           </Button>
-          {ACTIONS.map((action) => (
-            <Button key={action.status} variant={action.primary ? "primary" : "secondary"} disabled={!c || c.status === action.status}
-              busy={save.isPending && save.variables?.status === action.status} onClick={() => save.mutate({ status: action.status })}>
-              {action.label}
-            </Button>
-          ))}
+          {c?.allowed_transitions.map((to) => {
+            const needsForm = RESOLVED.includes(to) || RESOLVED.includes(c.status);
+            return (
+              <Button key={to} variant={to === "dispatched" ? "primary" : "secondary"}
+                busy={!needsForm && save.isPending && save.variables?.status === to}
+                onClick={() => (needsForm ? setPending(to) : save.mutate({ status: to }))}>
+                {actionLabel(c.status, to)}
+              </Button>
+            );
+          })}
+          {c && c.status === "dispatched" && c.allowed_transitions.length === 0 ? (
+            <span className="self-center text-xs text-ink-3">A supervisor records the inspection outcome.</span>
+          ) : null}
         </div>
       </header>
+      {c && pending ? (
+        <TransitionForm key={pending} to={pending} busy={save.isPending} onCancel={() => setPending(null)}
+          onSubmit={(payload) => save.mutate(payload)} />
+      ) : null}
+      {c?.resolution ? <Resolution resolution={c.resolution} /> : null}
       {save.isError ? <ApiError title="Could not update the case" error={save.error} /> : null}
       {report.isError ? <ApiError title="Could not produce the case report" error={report.error} /> : null}
 
@@ -125,11 +185,10 @@ export function CaseFilePage() {
               ["Longest gap", facts ? `${fmtInt(facts.longestGap)} days` : "—"],
               ["Zero-use days", facts ? fmtInt(facts.zeroDays) : "—"],
               ["Use while reporting", facts?.mean != null ? `${facts.mean.toFixed(2)} kWh/day` : "—"],
-              ["Dataset label", series.data ? (series.data.label === 1 ? "theft" : "honest") : "—"],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-3">
                 <dt className="text-ink-2">{k}</dt>
-                <dd className={`m-0 font-mono ${k === "Dataset label" && v === "theft" ? "text-risk-text" : ""}`}>{v}</dd>
+                <dd className="m-0 font-mono">{v}</dd>
               </div>
             ))}
           </dl>
@@ -147,19 +206,22 @@ export function CaseFilePage() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card label="Why the model flagged this customer" className="flex flex-col gap-4 p-[22px]">
-          <CardHeader title="Why it was flagged" subtitle="SHAP contributions in log-odds: red pushes towards theft, blue away from it." />
+          <CardHeader title="Why it was flagged"
+            subtitle="SHAP contributions to the model's raw score, in log-odds: red pushes towards theft, blue away from it. Calibration then rescales the raw score to a probability without changing the ranking." />
           {explanation.data ? (
-            <ShapWaterfall baseValue={explanation.data.base_value} probability={explanation.data.probability} reasons={contributions.slice(0, 5)} featureCount={contributions.length} />
+            <ShapWaterfall baseValue={explanation.data.base_value} rawScore={explanation.data.raw_score} probability={explanation.data.probability}
+              reasons={contributions.slice(0, 5)} featureCount={contributions.length} />
           ) : explanation.isError ? <ApiError error={explanation.error} /> : <Skeleton className="h-64" />}
           {check.data ? (
-            <div role="status" className={`flex items-start gap-2.5 rounded-lg px-3.5 py-3 text-[13px] ${check.data.agrees ? "bg-cobalt-soft text-cobalt-ink" : "bg-amber-bg text-amber-ink"}`}>
-              {check.data.agrees ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
+            <div role="status" className={`flex items-start gap-2.5 rounded-lg px-3.5 py-3 text-[13px] ${check.data.consistent ? "bg-cobalt-soft text-cobalt-ink" : "bg-amber-bg text-amber-ink"}`}>
+              {check.data.consistent ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
               <span className="flex flex-col gap-0.5">
-                <span className="font-medium">Second opinion (LIME): {check.data.message}</span>
+                <span className="font-medium">Explanation consistency (LIME): {check.data.message}</span>
                 <span className="text-xs opacity-80">LIME's strongest signals: {check.data.lime.map((a) => a.label).join(", ")}</span>
+                <span className="text-xs opacity-80">{check.data.note}</span>
               </span>
             </div>
-          ) : check.isError ? <ApiError title="Second opinion unavailable" error={check.error} /> : explanation.data ? <Skeleton className="h-14" /> : null}
+          ) : check.isError ? <ApiError title="Explanation consistency unavailable" error={check.error} /> : explanation.data ? <Skeleton className="h-14" /> : null}
         </Card>
 
         <Card label="Case activity" className="flex flex-col gap-4 p-[22px]">
@@ -170,7 +232,7 @@ export function CaseFilePage() {
                 <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${i === 0 ? "bg-risk" : "bg-cobalt"}`} />
                 <span className="flex flex-col gap-0.5">
                   <span className="text-sm font-medium">{event.event}</span>
-                  <span className="text-xs text-ink-3">{fmtDateTime(event.at)}</span>
+                  <span className="text-xs text-ink-3">{fmtDateTime(event.at)} · {event.actor}</span>
                 </span>
               </li>
             ))}

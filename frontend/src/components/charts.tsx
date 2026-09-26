@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { OperatingPoint, Reading, Reason, ScoreDistribution } from "@/lib/api";
+import type { Reading, Reason, ReliabilityBin } from "@/lib/api";
 import { fmtInt, fmtNum, fmtPct } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -9,47 +9,48 @@ const AMBER = "#E0873A";
 const NEUTRAL = "#C4C9D2";
 
 // ---------------------------------------------------------------------------
-// Risk histogram (log scale, stacked by dataset label)
+// Risk histogram (log scale); with `theft`, the true-theft share of each bar is shaded
+// (research view of the test customers only: the operational population has no labels)
 // ---------------------------------------------------------------------------
 
-export function RiskHistogram({ dist, height = 150 }: { dist: ScoreDistribution; height?: number }) {
+export function RiskHistogram({ edges, total, theft, threshold, height = 150 }: {
+  edges: number[]; total: number[]; theft?: number[]; threshold: number; height?: number;
+}) {
   const [hover, setHover] = useState<number | null>(null);
-  const totals = dist.honest.map((h, i) => h + dist.theft[i]);
-  const maxLog = Math.log10(Math.max(...totals, 1) + 1);
+  const maxLog = Math.log10(Math.max(...total, 1) + 1);
   const scale = (n: number) => (n <= 0 ? 0 : (height - 10) * (Math.log10(n + 1) / maxLog));
   const active = hover ?? null;
+  const describe = (i: number) => `${fmtInt(total[i])} customers${theft ? ` · ${fmtInt(theft[i])} theft` : ""}`;
 
   return (
     <div className="flex flex-col gap-2">
       <div className="relative flex items-end gap-1 border-b border-[#D9D6CE]" style={{ height }} onMouseLeave={() => setHover(null)}>
-        {totals.map((total, i) => {
-          const barHeight = scale(total);
-          const theftHeight = total ? (barHeight * dist.theft[i]) / total : 0;
+        {total.map((count, i) => {
+          const barHeight = scale(count);
+          const theftHeight = theft && count ? (barHeight * theft[i]) / count : 0;
           return (
             <button
               key={i}
               type="button"
-              aria-label={`Scores ${dist.edges[i].toFixed(2)} to ${dist.edges[i + 1].toFixed(2)}: ${total} customers, ${dist.theft[i]} labelled theft`}
+              aria-label={`Probabilities ${edges[i].toFixed(2)} to ${edges[i + 1].toFixed(2)}: ${describe(i)}`}
               onMouseEnter={() => setHover(i)}
               onFocus={() => setHover(i)}
               className={cn("flex h-full flex-1 flex-col justify-end transition-opacity", active !== null && active !== i && "opacity-45")}
             >
-              <span className="block rounded-t-[2px]" style={{ height: barHeight - theftHeight, background: NEUTRAL }} />
-              <span className="block" style={{ height: theftHeight, background: RISK }} />
+              <span className="block rounded-t-[2px]" style={{ height: barHeight - theftHeight, background: theft ? NEUTRAL : edges[i] >= threshold ? AMBER : NEUTRAL }} />
+              {theft ? <span className="block" style={{ height: theftHeight, background: RISK }} /> : null}
             </button>
           );
         })}
-        <div className="pointer-events-none absolute bottom-0 top-[-6px] border-l-[1.5px] border-dashed border-ink" style={{ left: `${dist.threshold * 100}%` }} />
-        <span className="pointer-events-none absolute top-[-6px] font-mono text-[11px]" style={{ left: `calc(${dist.threshold * 100}% + 6px)` }}>
-          τ {dist.threshold.toFixed(3)}
+        <div className="pointer-events-none absolute bottom-0 top-[-6px] border-l-[1.5px] border-dashed border-ink" style={{ left: `${threshold * 100}%` }} />
+        <span className="pointer-events-none absolute top-[-6px] font-mono text-[11px]" style={{ left: `calc(${threshold * 100}% + 6px)` }}>
+          τ {threshold.toFixed(3)}
         </span>
       </div>
       <div className="flex justify-between font-mono text-[11px] text-ink-3">
         <span>0.0</span>
         <span className="text-ink-2">
-          {active !== null
-            ? `${dist.edges[active].toFixed(2)}–${dist.edges[active + 1].toFixed(2)} · ${fmtInt(totals[active])} customers · ${fmtInt(dist.theft[active])} theft`
-            : "hover a bar"}
+          {active !== null ? `${edges[active].toFixed(2)}–${edges[active + 1].toFixed(2)} · ${describe(active)}` : "hover a bar"}
         </span>
         <span>1.0</span>
       </div>
@@ -192,8 +193,10 @@ export function ConsumptionChart({ points, height = 240 }: { points: Reading[]; 
 
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 
-export function ShapWaterfall({ baseValue, probability, reasons, featureCount }: { baseValue: number; probability: number; reasons: Reason[]; featureCount: number }) {
-  const output = Math.log(probability / (1 - probability));
+export function ShapWaterfall({ baseValue, rawScore, probability, reasons, featureCount }: {
+  baseValue: number; rawScore: number; probability: number; reasons: Reason[]; featureCount: number;
+}) {
+  const output = Math.log(rawScore / (1 - rawScore));
   const shown = reasons.reduce((sum, r) => sum + r.shap_value, 0);
   const rows = [
     ...reasons.map((r) => ({ label: r.label, value: r.display_value, shap: r.shap_value, key: r.feature })),
@@ -212,9 +215,9 @@ export function ShapWaterfall({ baseValue, probability, reasons, featureCount }:
 
   return (
     <div className="grid grid-cols-[minmax(0,230px)_minmax(0,1fr)_64px] items-center gap-x-3.5 gap-y-2.5 text-[13px]">
-      <span className="text-ink-2">Typical customer (base rate)</span>
+      <span className="text-ink-2">Average raw score</span>
       <span className="relative h-5"><span className="absolute top-1/2 h-4 w-[2px] -translate-y-1/2 bg-ink-3" style={{ left: `${pos(baseValue)}%` }} /></span>
-      <span className="text-right font-mono tabular">{fmtPct(sigmoid(baseValue), 1)}</span>
+      <span className="text-right font-mono tabular">{fmtNum(sigmoid(baseValue))}</span>
       {steps.map((s) => {
         const left = Math.min(pos(s.from), pos(s.to));
         const width = Math.max(Math.abs(pos(s.to) - pos(s.from)), 0.6);
@@ -234,9 +237,12 @@ export function ShapWaterfall({ baseValue, probability, reasons, featureCount }:
           </div>
         );
       })}
-      <span className="border-t border-line-soft pt-2.5 font-semibold">Model output</span>
+      <span className="border-t border-line-soft pt-2.5 font-semibold">Raw score</span>
       <span className="border-t border-line-soft pt-2.5 text-xs text-ink-3">log-odds {baseValue.toFixed(2)} → {output >= 0 ? "+" : ""}{output.toFixed(2)}</span>
-      <span className="border-t border-line-soft pt-2.5 text-right font-mono font-semibold tabular">{fmtPct(probability, 1)}</span>
+      <span className="border-t border-line-soft pt-2.5 text-right font-mono font-semibold tabular">{fmtNum(rawScore)}</span>
+      <span className="font-semibold">Calibrated probability</span>
+      <span className="text-xs text-ink-3">same ranking, rescaled to observed theft rates</span>
+      <span className="text-right font-mono font-semibold tabular">{fmtPct(probability, 1)}</span>
     </div>
   );
 }
@@ -245,11 +251,15 @@ export function ShapWaterfall({ baseValue, probability, reasons, featureCount }:
 // Precision / recall trade-off
 // ---------------------------------------------------------------------------
 
-export function TradeoffChart({ points, index, onPick, trainedThreshold }: { points: OperatingPoint[]; index: number; onPick: (i: number) => void; trainedThreshold?: number | null }) {
+type CurvePoint = { threshold: number; precision: number | null; recall: number };
+
+export function TradeoffChart({ points, index, onPick, trainedThreshold }: { points: CurvePoint[]; index: number; onPick: (i: number) => void; trainedThreshold?: number | null }) {
   const W = 640, H = 300, L = 40, R = 620, T = 20, B = 260;
   const x = (i: number) => L + (i / (points.length - 1)) * (R - L);
   const y = (v: number) => B - v * (B - T);
-  const line = (key: "precision" | "recall") => points.map((p, i) => `${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join(" ");
+  // Precision is undefined where nothing is flagged; the line stops there.
+  const line = (key: "precision" | "recall") => points.filter((p) => p[key] !== null)
+    .map((p) => `${x(points.indexOf(p)).toFixed(1)},${y(p[key] as number).toFixed(1)}`).join(" ");
   const p = points[index];
   const trainedIndex = trainedThreshold == null ? -1 : points.reduce((best, pt, i) => Math.abs(pt.threshold - trainedThreshold) < Math.abs(points[best].threshold - trainedThreshold) ? i : best, 0);
 
@@ -276,8 +286,65 @@ export function TradeoffChart({ points, index, onPick, trainedThreshold }: { poi
       <polyline points={line("precision")} fill="none" stroke={COBALT} strokeWidth="2.5" strokeLinejoin="round" />
       <polyline points={line("recall")} fill="none" stroke={AMBER} strokeWidth="2.5" strokeLinejoin="round" />
       <line x1={x(index)} x2={x(index)} y1={T - 6} y2={B} stroke="#14161B" strokeWidth="1.5" strokeDasharray="4 4" />
-      <circle cx={x(index)} cy={y(p.precision)} r="6" fill={COBALT} stroke="#fff" strokeWidth="2" />
+      {p.precision !== null ? <circle cx={x(index)} cy={y(p.precision)} r="6" fill={COBALT} stroke="#fff" strokeWidth="2" /> : null}
       <circle cx={x(index)} cy={y(p.recall)} r="6" fill={AMBER} stroke="#fff" strokeWidth="2" />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Net value by threshold (threshold studio cost model)
+// ---------------------------------------------------------------------------
+
+export function NetValueChart({ points, index }: { points: Array<{ threshold: number; net_value: number }>; index: number }) {
+  const W = 640, H = 170, L = 64, R = 620, T = 14, B = 140;
+  const values = points.map((p) => p.net_value);
+  const lo = Math.min(0, ...values), hi = Math.max(0, ...values);
+  const span = hi - lo || 1;
+  const x = (i: number) => L + (i / (points.length - 1)) * (R - L);
+  const y = (v: number) => B - ((v - lo) / span) * (B - T);
+  const best = values.indexOf(Math.max(...values));
+  const money = (v: number) => (Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : Math.abs(v) >= 1e3 ? `${(v / 1e3).toFixed(0)}k` : v.toFixed(0));
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Expected net value by threshold; highest at τ ${points[best].threshold.toFixed(2)}`}>
+      <line x1={L} x2={R} y1={y(0)} y2={y(0)} stroke="#D9D6CE" />
+      {[hi, lo].map((v) => (
+        <text key={v} x={L - 8} y={y(v) + 4} textAnchor="end" fontSize="11" fill="#6B7280" fontFamily="IBM Plex Mono, monospace">{money(v)}</text>
+      ))}
+      <polyline points={points.map((p, i) => `${x(i).toFixed(1)},${y(p.net_value).toFixed(1)}`).join(" ")} fill="none" stroke={COBALT} strokeWidth="2.5" />
+      <line x1={x(best)} x2={x(best)} y1={T} y2={B} stroke="#9AA0AA" strokeDasharray="2 4" />
+      <text x={x(best) + 4} y={T + 10} fontSize="10" fill="#6B7280" fontFamily="IBM Plex Sans, sans-serif">best τ {points[best].threshold.toFixed(2)}</text>
+      <line x1={x(index)} x2={x(index)} y1={T} y2={B} stroke="#14161B" strokeWidth="1.5" strokeDasharray="4 4" />
+      <circle cx={x(index)} cy={y(points[index].net_value)} r="5" fill={COBALT} stroke="#fff" strokeWidth="2" />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Reliability diagram (calibration)
+// ---------------------------------------------------------------------------
+
+export function ReliabilityChart({ raw, calibrated }: { raw: ReliabilityBin[]; calibrated: ReliabilityBin[] }) {
+  const W = 360, H = 300, L = 44, R = 344, T = 12, B = 262;
+  const x = (v: number) => L + v * (R - L);
+  const y = (v: number) => B - v * (B - T);
+  const path = (bins: ReliabilityBin[]) => bins.map((b) => `${x(b.mean_predicted).toFixed(1)},${y(b.observed_rate).toFixed(1)}`).join(" ");
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[420px]" role="img" aria-label="Reliability diagram: observed theft rate against predicted probability">
+      <line x1={x(0)} y1={y(0)} x2={x(1)} y2={y(1)} stroke="#D9D6CE" strokeDasharray="4 4" />
+      <line x1={L} x2={R} y1={B} y2={B} stroke="#D9D6CE" />
+      <line x1={L} x2={L} y1={T} y2={B} stroke="#D9D6CE" />
+      {[0, 0.5, 1].map((v) => (
+        <g key={v}>
+          <text x={x(v)} y={B + 16} textAnchor="middle" fontSize="11" fill="#6B7280" fontFamily="IBM Plex Mono, monospace">{v}</text>
+          <text x={L - 8} y={y(v) + 4} textAnchor="end" fontSize="11" fill="#6B7280" fontFamily="IBM Plex Mono, monospace">{v}</text>
+        </g>
+      ))}
+      <text x={(L + R) / 2} y={H - 2} textAnchor="middle" fontSize="11" fill="#52514E">predicted probability</text>
+      <polyline points={path(raw)} fill="none" stroke={AMBER} strokeWidth="2" />
+      {raw.map((b) => <circle key={`r${b.low}`} cx={x(b.mean_predicted)} cy={y(b.observed_rate)} r="3.5" fill={AMBER} />)}
+      <polyline points={path(calibrated)} fill="none" stroke={COBALT} strokeWidth="2.5" />
+      {calibrated.map((b) => <circle key={`c${b.low}`} cx={x(b.mean_predicted)} cy={y(b.observed_rate)} r="4" fill={COBALT} />)}
     </svg>
   );
 }

@@ -2,10 +2,10 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, CheckCircle2, Play, Search, XCircle } from "lucide-react";
-import { getCases, getModelMetrics, getPipelineRuns, getScoreDistribution, startPipelineRun, type Tier } from "@/lib/api";
+import { getCases, getModelMetrics, getPipelineRuns, getPopulationDistribution, getThresholdPreview, startPipelineRun, type Tier } from "@/lib/api";
 import { fmtInt, fmtNum, fmtPct, fmtRelative, fmtSeconds, shortId } from "@/lib/format";
 import { ApiError, Button, Card, CardHeader, PageHeader, Pill, Skeleton, Stat, StatusBadge, TierBadge } from "@/components/ui";
-import { ConfusionGrid, Legend, RiskHistogram } from "@/components/charts";
+import { Legend, RiskHistogram } from "@/components/charts";
 
 export function CommandCenterPage() {
   const navigate = useNavigate();
@@ -14,9 +14,15 @@ export function CommandCenterPage() {
   const [search, setSearch] = useState("");
 
   const metrics = useQuery({ queryKey: ["model-metrics"], queryFn: getModelMetrics });
-  const dist = useQuery({ queryKey: ["score-distribution"], queryFn: getScoreDistribution });
+  const dist = useQuery({ queryKey: ["score-distribution"], queryFn: getPopulationDistribution });
   const runs = useQuery({ queryKey: ["pipeline-runs"], queryFn: () => getPipelineRuns(1) });
   const queue = useQuery({ queryKey: ["cases", "queue", tier], queryFn: () => getCases({ tier, page_size: 9 }) });
+  const threshold = metrics.data?.threshold;
+  const preview = useQuery({
+    queryKey: ["threshold-preview", threshold],
+    queryFn: () => getThresholdPreview(threshold as number),
+    enabled: threshold !== undefined,
+  });
 
   const run = useMutation({
     mutationFn: startPipelineRun,
@@ -28,14 +34,13 @@ export function CommandCenterPage() {
   }
 
   const m = metrics.data;
-  const cm = m?.confusion_matrix;
-  const hitRate = cm ? cm.tp / Math.max(cm.tp + cm.fp, 1) : undefined;
   const lastRun = runs.data?.[0];
+  const expectedHitRate = m && m.flagged ? m.expected_thefts_flagged / m.flagged : undefined;
 
   return (
     <>
       <PageHeader
-        eyebrow={m ? `SGCC network · ${fmtInt(m.customers_monitored)} held-out customers · Jan 2014 – Oct 2016` : "Loading…"}
+        eyebrow={m ? `${m.population.source === "sample" ? "SGCC sample of unseen customers" : `Uploaded readings · ${m.population.filename}`} · ${fmtInt(m.customers_monitored)} customers` : "Loading…"}
         title="Command center"
         actions={
           <>
@@ -58,10 +63,12 @@ export function CommandCenterPage() {
       <section aria-label="Key figures" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {m ? (
           <>
-            <Stat label="Customers monitored" value={fmtInt(m.customers_monitored)} hint="1,034 days of meter reads each" />
+            <Stat label="Customers monitored" value={fmtInt(m.customers_monitored)} hint={`${m.pipeline_label} · v${m.model_version}`} />
             <Stat label="Flagged for inspection" tone="risk" value={fmtInt(m.flagged)} hint={`${fmtPct(m.flagged / m.customers_monitored, 1)} of customers at τ = ${m.threshold.toFixed(3)}`} />
-            <Stat label="Hit rate of flags" value={fmtPct(hitRate)} hint={`vs ${fmtPct(m.base_rate, 1)} base rate · ${hitRate ? (hitRate / m.base_rate).toFixed(1) : "—"}× random`} />
-            <Stat label="Model quality (hold-out)" value={fmtNum(m.metrics.auc)} hint={`ROC-AUC · PR-AUC ${fmtNum(m.metrics.pr_auc)}`} />
+            <Stat label="Expected thefts among flagged" value={fmtNum(m.expected_thefts_flagged, 0)}
+              hint={`Estimate: sum of calibrated probabilities · ${fmtPct(expectedHitRate)} of visits`} />
+            <Stat label="Expected thefts, all customers" value={fmtNum(m.expected_thefts_total, 0)}
+              hint={`Estimate · ${fmtPct(m.expected_thefts_total / m.customers_monitored, 1)} of the population`} />
           </>
         ) : Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[132px]" />)}
       </section>
@@ -140,12 +147,28 @@ export function CommandCenterPage() {
         <div className="flex flex-col gap-4">
           <Card label="Risk distribution" className="flex flex-col gap-3.5 px-[22px] py-5">
             <CardHeader title="Risk distribution" action={<span className="text-xs text-ink-3">log scale</span>} />
-            {dist.data ? <RiskHistogram dist={dist.data} /> : <Skeleton className="h-[170px]" />}
-            <Legend items={[{ color: "#C4C9D2", label: "Honest (label)" }, { color: "#B93C15", label: "Theft (label)" }]} />
+            {dist.data ? <RiskHistogram edges={dist.data.edges} total={dist.data.counts} threshold={dist.data.threshold} /> : <Skeleton className="h-[170px]" />}
+            <Legend items={[{ color: "#E0873A", label: "At or above τ" }, { color: "#C4C9D2", label: "Below τ" }]} />
           </Card>
-          <Card label="Outcome at current threshold" className="flex flex-1 flex-col gap-3.5 px-[22px] py-5">
-            <CardHeader title={m ? `Outcome at τ ${m.threshold.toFixed(3)}` : "Outcome"} action={<Link to="/threshold" className="text-[13px] font-medium text-cobalt hover:text-cobalt-ink">Tune threshold</Link>} />
-            {cm ? <ConfusionGrid tp={cm.tp} fp={cm.fp} fn={cm.fn} tn={cm.tn} /> : <Skeleton className="h-40" />}
+          <Card label="What the threshold means" className="flex flex-1 flex-col gap-3.5 px-[22px] py-5">
+            <CardHeader title={m ? `What τ ${m.threshold.toFixed(3)} means` : "What the threshold means"}
+              subtitle={preview.data ? `On the ${fmtInt(preview.data.validation.customers)} validation customers the threshold was chosen on` : undefined}
+              action={<Link to="/threshold" className="text-[13px] font-medium text-cobalt hover:text-cobalt-ink">Tune threshold</Link>} />
+            {preview.data ? (
+              <dl className="grid grid-cols-2 gap-3 text-[13px]">
+                {[
+                  ["Precision", fmtPct(preview.data.validation.precision), "of flagged customers were thieves"],
+                  ["Recall", fmtPct(preview.data.validation.recall), "of thieves were flagged"],
+                ].map(([label, value, hint]) => (
+                  <div key={label} className="flex flex-col gap-0.5 rounded-lg bg-tint p-4">
+                    <dt className="text-ink-3">{label}</dt>
+                    <dd className="font-display text-3xl tabular">{value}</dd>
+                    <dd className="text-xs text-ink-2">{hint}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : <Skeleton className="h-40" />}
+            <p className="text-xs text-ink-3">A flag is a reason to inspect, not evidence of theft. <Link to="/research" className="text-cobalt">Test-set evaluation</Link></p>
           </Card>
         </div>
       </div>

@@ -66,11 +66,11 @@ def test_is_consumption_frame():
     assert not is_consumption_frame(pd.DataFrame({"CONS_NO": ["a"], "mean": [1.0]}))
 
 
-def test_demo_dataset_loads(demo_dataset_path):
-    wide, labels = load_wide(str(demo_dataset_path))
+def test_demo_dataset_loads_without_labels(demo_dataset_path):
+    wide, labels = load_wide(str(demo_dataset_path), require_labels=False)
 
-    assert len(wide) == len(labels) > 100
-    assert set(labels.unique()) == {0, 1}
+    assert labels is None
+    assert len(wide) > 100
     assert wide.columns.is_monotonic_increasing
     observed = wide.to_numpy()[~np.isnan(wide.to_numpy())]
     assert (observed >= 0).all()

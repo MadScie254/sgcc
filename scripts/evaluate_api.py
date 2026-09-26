@@ -2,14 +2,15 @@
 Check the model end to end through a running API.
 
     uvicorn backend.main:app --port 8000        # in another terminal
-    python scripts/evaluate_api.py --url http://127.0.0.1:8000 [--key API_KEY]
+    python scripts/evaluate_api.py --url http://127.0.0.1:8000 [--key SUPERVISOR_KEY]
 
-Verifies that the served model reproduces its hold-out quality, that every
-endpoint scores a customer identically, that SHAP explanations add up to the
-predicted probability, that LIME gives a second opinion, that publishing a
-threshold re-flags customers, and that a PDF report can be generated and
-downloaded. Exits non-zero if any
-check fails.
+Verifies that the published files passed the integrity check, that the research
+record shows the model's test-set quality, that the operational views carry no
+labels, that every endpoint scores a customer identically, that SHAP explanations
+add up to the raw score, that LIME's consistency check runs, that publishing a
+threshold re-flags customers, and that operations and research PDF reports can be
+generated and downloaded. Publishing a threshold needs a supervisor key. Exits
+non-zero if any check fails.
 """
 
 import argparse
@@ -54,29 +55,34 @@ def main() -> int:
     except urllib.error.URLError as exc:
         print(f"API not reachable at {args.url}: {exc}")
         return 2
-    check("health", health.get("model_loaded") is True, f"model v{health.get('model_version')} loaded")
+    check("health", health.get("model_loaded") is True and not health.get("problems"),
+          f"model v{health.get('model_version')} loaded, manifest verified, {health.get('database')} + {health.get('blob_store')} storage")
+    me = api.call("GET", "/me")
+    check("identity", me["role"] == "supervisor", f"acting as {me['name']} ({me['role']})")
 
     run = api.call("POST", "/pipeline/runs")
     check("scoring run", run["status"] == "succeeded",
           f"{run['seconds']:.2f} s · " + ", ".join(f"{s['name']} {s['seconds']:.2f}s" for s in run["stages"]))
 
+    evaluation = api.call("GET", "/research/evaluation")
+    em, population = evaluation["metrics"], evaluation["population"]
+    check("test-set ROC-AUC", em["auc"] >= 0.80, f"{em['auc']:.4f} on {population['customers']} test customers")
+    base_rate = population["theft"] / population["customers"]
+    check("test-set PR-AUC vs base rate", em["pr_auc"] > 3 * base_rate, f"{em['pr_auc']:.4f} (base rate {base_rate:.3f})")
+    calibration = evaluation["calibration"]
+    check("calibration", calibration["platt"]["ece"] < calibration["raw"]["ece"],
+          f"test ECE {calibration['raw']['ece']:.4f} raw → {calibration['platt']['ece']:.4f} calibrated")
+    rows = api.call("GET", "/research/comparison")
+    check("significance record", all(r["pr_auc_ci"] for r in rows),
+          ", ".join(f"{r['model']} {r['pr_auc']:.3f} [{r['pr_auc_ci'][0]:.3f}, {r['pr_auc_ci'][1]:.3f}]" for r in rows if r["pr_auc_ci"]))
+
     metrics = api.call("GET", "/model/metrics")
     trained = metrics["trained_threshold"]
-    preview = api.call("GET", f"/predict/threshold-preview?threshold={trained}")
-    served_auc = preview["metrics"]["auc"]
-    check("hold-out ROC-AUC (served customers)", served_auc >= 0.80,
-          f"{served_auc:.4f} on {metrics['customers_monitored']} customers (training report: {metrics['metrics']['auc']:.4f})")
-
-    curve = api.call("GET", "/model/operating-curve")
-    # PR-AUC by the step rule over the curve's thresholds (a coarse lower-resolution estimate).
-    pts = sorted(curve, key=lambda p: p["recall"])
-    pr_auc = sum((b["recall"] - a["recall"]) * b["precision"] for a, b in zip(pts, pts[1:]))
-    base_rate = metrics["base_rate"]
-    check("PR-AUC vs base rate", pr_auc > 3 * base_rate, f"≈{pr_auc:.3f} (base rate {base_rate:.3f})")
-    cm = preview["confusion_matrix"]
-    check("precision at trained threshold", preview["metrics"]["precision"] > 0.4,
-          f"precision {preview['metrics']['precision']:.3f}, recall {preview['metrics']['recall']:.3f}, "
-          f"tp {cm['tp']} fp {cm['fp']} fn {cm['fn']} tn {cm['tn']}")
+    check("operations carry no labels", not {"confusion_matrix", "metrics", "base_rate"} & set(metrics),
+          f"{metrics['flagged']} of {metrics['customers_monitored']} flagged, ~{metrics['expected_thefts_flagged']:.0f} thefts expected")
+    preview = api.call("GET", f"/model/threshold-preview?threshold={trained}")["validation"]
+    check("validation precision at trained threshold", preview["precision"] > 0.4,
+          f"precision {preview['precision']:.3f}, recall {preview['recall']:.3f} on {preview['customers']} validation customers")
 
     ranked = api.call("GET", f"/customers?page_size={min(args.sample, 100)}")["items"]
     worst_gap, worst_shap = 0.0, 0.0
@@ -85,15 +91,15 @@ def main() -> int:
         local = api.call("GET", f"/customers/{item['customer_id']}/explanation")
         worst_gap = max(worst_gap, abs(single["probability"] - item["risk_score"]), abs(local["probability"] - item["risk_score"]))
         logit = local["base_value"] + sum(c["shap_value"] for c in local["contributions"])
-        worst_shap = max(worst_shap, abs(1 / (1 + math.exp(-logit)) - local["probability"]))
+        worst_shap = max(worst_shap, abs(1 / (1 + math.exp(-logit)) - local["raw_score"]))
     check("endpoint consistency", worst_gap < 1e-6, f"max score difference across endpoints {worst_gap:.2e} over {len(ranked[:args.sample])} customers")
-    check("SHAP additivity", worst_shap < 1e-3, f"max |sigmoid(base + Σ shap) − p| = {worst_shap:.2e}")
+    check("SHAP additivity", worst_shap < 1e-3, f"max |sigmoid(base + Σ shap) − raw score| = {worst_shap:.2e}")
 
-    second = api.call("GET", f"/customers/{ranked[0]['customer_id']}/explanation-check")
-    check("LIME second opinion", len(second["lime"]) == second["top_n"], second["message"])
+    consistency = api.call("GET", f"/customers/{ranked[0]['customer_id']}/explanation-check")
+    check("explanation consistency (LIME)", len(consistency["lime"]) == consistency["top_n"], consistency["message"])
 
-    flagged_before = metrics["flagged"]
     higher = round(min(0.95, trained + 0.25), 2)
+    flagged_before = metrics["flagged"]
     raised = api.call("PUT", "/model/threshold", {"threshold": higher})
     restored = api.call("PUT", "/model/threshold", {"threshold": None})
     check("threshold publish round trip", raised["flagged"] < flagged_before == restored["flagged"],
@@ -103,12 +109,13 @@ def main() -> int:
     cases = api.call("GET", "/cases?page_size=1")
     check("cases opened for flags", cases["total"] >= restored["flagged"], f"{cases['total']} cases for {restored['flagged']} flagged customers")
 
-    if health["reports"]["available"]:
-        report = api.call("POST", "/reports", {"kind": "portfolio"})
+    for kind in ("portfolio", "research"):
+        if not health["reports"]["available"]:
+            check(f"{kind} report", False, health["reports"]["detail"])
+            continue
+        report = api.call("POST", "/reports", {"kind": kind})
         pdf = api.raw("GET", f"/reports/{report['report_id']}/pdf")
-        check("portfolio report", pdf.startswith(b"%PDF") and len(pdf) == report["bytes"], f"{report['report_id']}.pdf, {len(pdf):,} bytes")
-    else:
-        check("portfolio report", False, health["reports"]["detail"])
+        check(f"{kind} report", pdf.startswith(b"%PDF") and len(pdf) == report["bytes"], f"{report['report_id']}.pdf, {len(pdf):,} bytes")
 
     print(f"\n{'All checks passed' if not failures else f'{len(failures)} check(s) failed: ' + ', '.join(failures)}")
     return 1 if failures else 0

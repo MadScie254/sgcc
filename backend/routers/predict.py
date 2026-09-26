@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
-from backend.schemas import Prediction, PredictionRequest, ThresholdPreview
+from backend.schemas import Prediction, PredictionRequest
 from backend.services import model
 from backend.services.datasets import parse_csv, read_upload, score_frame, scores_csv
 
@@ -30,8 +30,3 @@ async def predict_batch(file: UploadFile = File(...)) -> Response:
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="predictions.csv"'},
     )
-
-
-@router.get("/threshold-preview", response_model=ThresholdPreview)
-def threshold_preview(threshold: float = Query(..., ge=0.0, le=1.0)):
-    return model.threshold_preview(threshold)

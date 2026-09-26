@@ -34,5 +34,5 @@ def explanation(customer_id: str):
 
 @router.get("/{customer_id}/explanation-check", response_model=ExplanationCheck)
 async def explanation_check(customer_id: str):
-    """LIME's view of the same prediction; disagreement with SHAP flags the case for review."""
+    """LIME's view of the same prediction: whether the explanation is consistent, not whether it is causal."""
     return await run_in_threadpool(model.explanation_check, customer_id)

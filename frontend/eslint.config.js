@@ -11,7 +11,7 @@ const tsconfigRootDir = fileURLToPath(new URL(".", import.meta.url));
 export default [
   js.configs.recommended,
   {
-    ignores: ["dist/**", "node_modules/**"],
+    ignores: ["dist/**", "node_modules/**", "playwright-report/**", "test-results/**"],
   },
   {
     files: ["eslint.config.js"],
@@ -20,6 +20,20 @@ export default [
         ...globals.node,
         URL: "readonly",
       },
+    },
+  },
+  {
+    files: ["e2e/**/*.ts", "playwright.config.ts"],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: { project: "./tsconfig.node.json", tsconfigRootDir },
+      // Test bodies run in Node; callbacks passed to page.evaluate run in the browser.
+      globals: { ...globals.node, ...globals.browser },
+    },
+    plugins: { "@typescript-eslint": tseslint },
+    rules: {
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },
   {

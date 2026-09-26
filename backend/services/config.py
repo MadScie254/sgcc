@@ -18,19 +18,16 @@ def get_config() -> Dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def get_paths() -> Dict[str, Path]:
-    """Absolute paths the API reads and writes. Runtime state is never committed."""
+    """Absolute paths the API reads, and the local state directory (never committed)."""
     config = get_config()
     paths = config["paths"]
-    # Everything the API writes (cases, runs, threshold, uploads, reports) lives under one directory.
-    state = BASE_DIR / os.getenv("SGCC_STATE_DIR", "artifacts/state")
     return {
         "model_file": BASE_DIR / paths["model_file"],
         "artifacts": BASE_DIR / paths["artifacts"],
         "baselines": BASE_DIR / paths["models"] / "baselines" / "comparison_results.json",
         "serving_data": BASE_DIR / config["data"]["serving_data_path"],
-        "state": state,
-        "uploads": state / "uploads",
-        "reports": state / "reports",
+        # SQLite database and local blobs when DATABASE_URL / S3_BUCKET are not set.
+        "state": BASE_DIR / os.getenv("SGCC_STATE_DIR", "artifacts/state"),
     }
 
 

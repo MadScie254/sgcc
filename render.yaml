@@ -1,3 +1,6 @@
+# Render blueprint: the API and console as one web service, state in a managed
+# PostgreSQL database, files (uploads, PDFs) in S3-compatible object storage.
+# A free web service has no persistent disk, so nothing is kept on local disk.
 services:
   - type: web
     name: sgcc-backend
@@ -11,9 +14,34 @@ services:
         value: 3.11.15
       - key: ENV
         value: production
-      # Enter this value on the dashboard's Settings page.
-      - key: API_KEY
-        generateValue: true
+      # Cases, runs, settings, the upload and report catalogues, and the audit log.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sgcc-db
+          property: connectionString
+      # Named keys: a JSON list of {"name", "role", "sha256"}; create each with
+      # python scripts/make_api_key.py <name> <analyst|supervisor>.
+      - key: API_KEYS
+        sync: false
+      # Object storage for uploads and PDF reports (AWS S3, Cloudflare R2, MinIO, ...).
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      # Uploads and reports older than this many days are deleted (0 keeps them).
+      - key: RETENTION_DAYS
+        value: "90"
       # Only needed when the frontend is served from a different origin.
       - key: FRONTEND_DEV_ORIGIN
         value: https://<your-render-url>.onrender.com
+
+databases:
+  - name: sgcc-db
+    databaseName: gridsentinel
+    plan: basic-256mb

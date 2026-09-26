@@ -12,46 +12,69 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.dependencies.auth import load_api_key, require_api_key
-from backend.routers import cases, customers, datasets, model, pipeline, predict, reports
+from backend.dependencies.auth import current_user, load_api_keys, make_rate_limiter
+from backend.routers import admin, cases, customers, datasets, model, pipeline, predict, reports, research
 from backend.schemas import Health
+from backend.services import db
+from backend.services.blobstore import get_blobstore
 from backend.services.config import environment, scoring_interval_minutes
-from backend.services.datasets import DatasetError, UploadTooLargeError
+from backend.services.data import ModelUnavailable, get_pipeline_spec
+from backend.services.datasets import DatasetError, DatasetInUseError, UploadTooLargeError, purge_expired_datasets
 from backend.services.errors import NotFoundError
-from backend.services.model import get_model_metrics, get_trained_model
-from backend.services.operations import run_scoring_pipeline
-from backend.services.reports import ReportsUnavailable, reports_status
+from backend.services.model import FeatureInputError, get_trained_model, integrity_problems
+from backend.services.operations import CasePermissionError, CaseTransitionError, PipelineBusyError, run_scoring_pipeline
+from backend.services.reports import ReportsUnavailable, purge_expired_reports, reports_status
 
 logger = logging.getLogger(__name__)
 
 IS_DEVELOPMENT = environment() == "development"
+MAINTENANCE_HOURS = 6
 
 
-async def _scheduled_scoring(interval_minutes: float) -> None:
+def _purge() -> None:
+    removed = purge_expired_datasets() + purge_expired_reports()
+    if removed:
+        logger.info("Retention: deleted %d expired uploads and reports", removed)
+
+
+async def _every(minutes: float, work, name: str) -> None:
     while True:
-        await asyncio.sleep(interval_minutes * 60)
+        await asyncio.sleep(minutes * 60)
         try:
-            await asyncio.to_thread(run_scoring_pipeline, "schedule")
+            await asyncio.to_thread(work)
+        except PipelineBusyError:
+            pass  # another instance is scoring
         except Exception:
-            logger.exception("Scheduled scoring run failed")
+            logger.exception("%s failed", name)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.api_key = load_api_key()
+    app.state.api_keys = load_api_keys()
+    app.state.rate_limiter = make_rate_limiter()
+    db.init_db()
     status = reports_status()
     if not status["available"]:
         logger.warning(status["detail"])
-    try:
-        # Warm every cache and record the run, so the pipeline view starts with real timings.
-        await asyncio.to_thread(run_scoring_pipeline, "startup")
-    except Exception:
-        logger.exception("Startup scoring run failed")
+    problems = integrity_problems()
+    if problems:
+        logger.error("Published model files failed verification; scoring is disabled: %s", "; ".join(problems))
+    else:
+        try:
+            # Warm every cache and record the run, so the pipeline view starts with real timings.
+            await asyncio.to_thread(run_scoring_pipeline, "startup")
+        except PipelineBusyError:
+            pass
+        except Exception:
+            logger.exception("Startup scoring run failed")
+    await asyncio.to_thread(_purge)
+    tasks = [asyncio.create_task(_every(MAINTENANCE_HOURS * 60, _purge, "Retention purge"))]
     interval = scoring_interval_minutes()
-    scheduler = asyncio.create_task(_scheduled_scoring(interval)) if interval > 0 else None
+    if interval > 0:
+        tasks.append(asyncio.create_task(_every(interval, lambda: run_scoring_pipeline("schedule"), "Scheduled scoring run")))
     yield
-    if scheduler is not None:
-        scheduler.cancel()
+    for task in tasks:
+        task.cancel()
 
 
 app = FastAPI(
@@ -71,7 +94,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "PATCH"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "X-API-Key"],
     expose_headers=["Content-Disposition"],
 )
@@ -86,19 +109,21 @@ async def security_headers(request: Request, call_next):
     return response
 
 
-for module in (model, customers, cases, pipeline, predict, datasets, reports):
-    app.include_router(module.router, dependencies=[Depends(require_api_key)])
+for module in (model, research, customers, cases, pipeline, predict, datasets, reports, admin):
+    app.include_router(module.router, dependencies=[Depends(current_user)])
 
 
 @app.get("/api/health", response_model=Health)
 def health():
+    payload = {"database": db.get_engine().dialect.name, "blob_store": get_blobstore().kind, "reports": reports_status()}
     try:
         get_trained_model()
-        payload = {"status": "ok", "model_loaded": True, "model_version": get_model_metrics()["model_version"]}
+        payload.update(status="ok", model_loaded=True, model_version=get_pipeline_spec()["model_version"], problems=[])
+    except ModelUnavailable as exc:
+        payload.update(status="degraded", model_loaded=False, model_version="unknown", problems=integrity_problems() or [str(exc)])
     except Exception:
         logger.exception("Health check could not load the model")
-        payload = {"status": "degraded", "model_loaded": False, "model_version": "unknown"}
-    payload["reports"] = reports_status()
+        payload.update(status="degraded", model_loaded=False, model_version="unknown", problems=["The model could not be loaded"])
     return payload if payload["model_loaded"] else JSONResponse(status_code=503, content=payload)
 
 
@@ -115,6 +140,31 @@ async def upload_too_large(request: Request, exc: UploadTooLargeError):
 @app.exception_handler(DatasetError)
 async def dataset_error(request: Request, exc: DatasetError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(FeatureInputError)
+async def feature_input_error(request: Request, exc: FeatureInputError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(ModelUnavailable)
+async def model_unavailable(request: Request, exc: ModelUnavailable):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(CaseTransitionError)
+async def case_transition(request: Request, exc: CaseTransitionError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(CasePermissionError)
+async def case_permission(request: Request, exc: CasePermissionError):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(DatasetInUseError)
+async def dataset_in_use(request: Request, exc: DatasetInUseError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @app.exception_handler(ReportsUnavailable)

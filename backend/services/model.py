@@ -1,83 +1,84 @@
+"""The served model in operations: scores, thresholds, explanations.
+
+Nothing here reads a label. Scores are Platt-calibrated probabilities (fitted on
+validation customers, frozen in artifacts/pipeline.json); SHAP explains the model's
+raw score in log-odds, of which the calibrated probability is a monotone rescaling.
+The threshold studio's precision and recall come from the saved validation
+predictions, the customers thresholds are chosen on, never the test set.
+"""
+
 from __future__ import annotations
 
-import json
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 import shap
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 
+from src.calibration import apply_platt
 from src.feature_catalog import feature_label, format_feature_value
 from src.modeling import load_model
+from src.publish import verify_manifest
 
 from . import data as data_service
-from .config import get_config, get_paths
-from .data import finite_or_none, get_feature_matrix, series_calendar
+from . import db
+from .config import BASE_DIR, get_paths
+from .data import ModelUnavailable, active_population, finite_or_none, get_feature_matrix, get_pipeline_spec, series_calendar
 from .errors import NotFoundError
 
-# Probabilities at or above this are "high" risk; between the decision threshold
-# and this they are "medium"; below the threshold "low".
-HIGH_RISK_PROBABILITY = 0.6
+# Calibrated probabilities at or above this are "high" risk (theft more likely than not); between
+# the decision threshold and this they are "medium"; below the threshold "low".
+HIGH_RISK_PROBABILITY = 0.5
+
+
+class FeatureInputError(ValueError):
+    """Feature rows do not carry every feature the model was trained on."""
 
 
 # ---------------------------------------------------------------------------
-# Model and threshold
+# Model, integrity and threshold
 # ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def integrity_problems() -> List[str]:
+    """Published files that are missing or changed since training, or a model/spec feature mismatch."""
+    problems = verify_manifest(BASE_DIR)
+    if problems:
+        return problems
+    spec = get_pipeline_spec()
+    names = list(load_model(str(get_paths()["model_file"])).get_booster().feature_names or [])
+    if names != list(spec["features"]):
+        problems.append("The model's features differ from the feature list in artifacts/pipeline.json")
+    return problems
+
 
 @lru_cache(maxsize=1)
 def get_trained_model():
+    problems = integrity_problems()
+    if problems:
+        raise ModelUnavailable("Scoring is disabled: " + "; ".join(problems))
     return load_model(str(get_paths()["model_file"]))
 
 
-@lru_cache(maxsize=1)
 def get_feature_names() -> List[str]:
-    return list(get_trained_model().get_booster().feature_names)
-
-
-@lru_cache(maxsize=1)
-def get_saved_metrics() -> Dict[str, Any]:
-    path = get_paths()["artifacts"] / "metrics.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    return list(get_pipeline_spec()["features"])
 
 
 def get_trained_threshold() -> float:
-    """Threshold chosen during training (max out-of-fold F1)."""
-    return float(get_saved_metrics().get("threshold", 0.5))
-
-
-def _operating_threshold_path():
-    return get_paths()["state"] / "operating_threshold.json"
-
-
-@lru_cache(maxsize=1)
-def _operating_threshold_override() -> Optional[float]:
-    path = _operating_threshold_path()
-    if not path.is_file():
-        return None
-    try:
-        value = float(json.loads(path.read_text(encoding="utf-8"))["threshold"])
-    except (ValueError, KeyError, TypeError):
-        return None
-    return value if 0.0 < value < 1.0 else None
+    """Threshold chosen during training: max F1 on calibrated validation probabilities."""
+    return float(get_pipeline_spec()["threshold"])
 
 
 def get_decision_threshold() -> float:
-    """Threshold in service: a published operating threshold, else the trained one."""
-    override = _operating_threshold_override()
-    return override if override is not None else get_trained_threshold()
+    """Threshold in service: the published operating threshold, else the trained one."""
+    setting = db.get_setting("threshold")
+    return float(setting["value"]["threshold"]) if setting else get_trained_threshold()
 
 
-def set_operating_threshold(threshold: Optional[float]) -> None:
+def set_operating_threshold(threshold: Optional[float], actor: str) -> None:
     """Publish an operating threshold, or None to return to the trained one."""
-    path = _operating_threshold_path()
-    if threshold is None:
-        path.unlink(missing_ok=True)
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"threshold": float(threshold)}), encoding="utf-8")
-    clear_caches()
+    db.set_setting("threshold", None if threshold is None else {"threshold": float(threshold)}, actor)
 
 
 def risk_tier(probability: float, threshold: float) -> str:
@@ -92,51 +93,66 @@ def risk_tier(probability: float, threshold: float) -> str:
 # Scoring
 # ---------------------------------------------------------------------------
 
-def predict_proba(features: pd.DataFrame) -> np.ndarray:
-    """Probabilities for rows of model features; absent or non-numeric values count as missing."""
+def _aligned(features: pd.DataFrame) -> pd.DataFrame:
     aligned = features.reindex(columns=get_feature_names()).apply(pd.to_numeric, errors="coerce")
-    impute = data_service.get_pipeline_spec().get("impute")
+    impute = get_pipeline_spec().get("impute")
     if impute:  # the model was trained on gap-free (resampled) rows
         aligned = aligned.fillna(pd.Series(impute, dtype=float))
-    return np.asarray(get_trained_model().predict_proba(aligned)[:, 1], dtype=float)
+    return aligned
 
 
-@lru_cache(maxsize=1)
-def get_population_probabilities() -> pd.Series:
-    """Theft probability of every served customer, highest first."""
-    X, _ = get_feature_matrix()
+def raw_scores(features: pd.DataFrame) -> np.ndarray:
+    """The model's own output (what SHAP explains)."""
+    return np.asarray(get_trained_model().predict_proba(_aligned(features))[:, 1], dtype=float)
+
+
+def calibrate(raw: np.ndarray) -> np.ndarray:
+    return apply_platt(raw, get_pipeline_spec()["calibration"])
+
+
+def predict_proba(features: pd.DataFrame) -> np.ndarray:
+    """Calibrated theft probabilities for rows of model features; non-numeric values count as missing."""
+    return calibrate(raw_scores(features))
+
+
+@lru_cache(maxsize=2)
+def _population_probabilities(population_id: str) -> pd.Series:
+    X = get_feature_matrix()
     return pd.Series(predict_proba(X), index=X.index.astype(str)).sort_values(ascending=False, kind="mergesort")
 
 
-def _confusion(y_true: np.ndarray, predicted: np.ndarray) -> Dict[str, int]:
-    tn, fp, fn, tp = confusion_matrix(y_true, predicted, labels=[0, 1]).ravel()
-    return {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)}
+def get_population_probabilities() -> pd.Series:
+    """Calibrated theft probability of every customer in the operational population, highest first."""
+    return _population_probabilities(active_population()["id"])
 
 
-@lru_cache(maxsize=1)
 def get_model_metrics() -> Dict[str, Any]:
-    """Hold-out metrics from training plus live counts over the served (held-out) customers."""
-    saved = get_saved_metrics()
-    _, y = get_feature_matrix()
-    probabilities = get_population_probabilities().reindex(y.index.astype(str)).to_numpy()
+    """The operational picture: how many customers are flagged, and how many thefts that should find."""
+    spec = get_pipeline_spec()
+    probabilities = get_population_probabilities().to_numpy()
     threshold = get_decision_threshold()
+    flagged = probabilities >= threshold
     tiers = pd.Series([risk_tier(p, threshold) for p in probabilities])
+    population = active_population()
     return {
         "threshold": threshold,
         "trained_threshold": get_trained_threshold(),
-        "model_version": str(saved.get("model_version", get_config()["model"]["version"])),
-        "trained_at": saved.get("trained_at"),
-        "metrics": {key: float(saved.get(key, 0.0)) for key in ("recall", "precision", "f1", "accuracy", "auc", "pr_auc", "mcc")},
-        "confusion_matrix": _confusion(y.to_numpy(), (probabilities >= threshold).astype(int)),
+        "model_version": spec["model_version"],
+        "trained_at": spec["trained_at"],
+        "pipeline": spec["name"],
+        "pipeline_label": spec["label"],
         "customers_monitored": int(len(probabilities)),
-        "flagged": int((probabilities >= threshold).sum()),
-        "base_rate": float(y.mean()),
+        "flagged": int(flagged.sum()),
+        # Sums of calibrated probabilities: estimates, not observed outcomes.
+        "expected_thefts_flagged": float(probabilities[flagged].sum()),
+        "expected_thefts_total": float(probabilities.sum()),
         "risk_tier_distribution": {tier: int((tiers == tier).sum()) for tier in ("high", "medium", "low")},
+        "population": {key: population[key] for key in ("id", "source", "filename", "promoted_at", "promoted_by")},
     }
 
 
 def list_customers(search: Optional[str], tier: Optional[str], page: int, page_size: int) -> Dict[str, Any]:
-    """Served customers ranked by theft probability."""
+    """Customers in the operational population ranked by theft probability."""
     probabilities = get_population_probabilities()
     threshold = get_decision_threshold()
     rows = [
@@ -151,57 +167,70 @@ def list_customers(search: Optional[str], tier: Optional[str], page: int, page_s
     return {"items": rows[start:start + page_size], "total": len(rows), "page": page, "page_size": page_size, "threshold": threshold}
 
 
+@lru_cache(maxsize=1)
+def _validation_arrays() -> tuple:
+    frame = data_service.load_predictions("validation")
+    return frame["label"].to_numpy(dtype=int), frame[get_pipeline_spec()["name"]].to_numpy(dtype=float)
+
+
+def _validation_point(threshold: float) -> Dict[str, Any]:
+    y, p = _validation_arrays()
+    flagged = p >= threshold
+    tp, fp = int((flagged & (y == 1)).sum()), int((flagged & (y == 0)).sum())
+    fn, tn = int((~flagged & (y == 1)).sum()), int((~flagged & (y == 0)).sum())
+    precision = tp / (tp + fp) if tp + fp else None
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision and recall else 0.0
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn, "precision": precision, "recall": recall, "f1": f1}
+
+
 def threshold_preview(threshold: float) -> Dict[str, Any]:
-    """Metrics at any threshold over the served customers, who were held out from training."""
-    _, y = get_feature_matrix()
-    y_true = y.to_numpy()
-    probabilities = get_population_probabilities().reindex(y.index.astype(str)).to_numpy()
-    predicted = (probabilities >= threshold).astype(int)
+    """What a threshold means: validation precision and recall, and the workload in the population."""
+    probabilities = get_population_probabilities().to_numpy()
+    flagged = probabilities >= threshold
+    y, _ = _validation_arrays()
     return {
         "threshold": threshold,
-        "metrics": {
-            "recall": float(recall_score(y_true, predicted, zero_division=0)),
-            "precision": float(precision_score(y_true, predicted, zero_division=0)),
-            "f1": float(f1_score(y_true, predicted, zero_division=0)),
-            "accuracy": float(accuracy_score(y_true, predicted)),
-            "auc": float(roc_auc_score(y_true, probabilities)),
-        },
-        "confusion_matrix": _confusion(y_true, predicted),
+        "validation": {**_validation_point(threshold), "customers": int(len(y)), "theft": int(y.sum())},
+        "population_flagged": int(flagged.sum()),
+        "population_expected_thefts": float(probabilities[flagged].sum()),
     }
 
 
-@lru_cache(maxsize=1)
-def operating_curve() -> List[Dict[str, float]]:
-    """Confusion counts, precision and recall at thresholds 0.02–0.98 over the served customers."""
-    _, y = get_feature_matrix()
-    y_true = y.to_numpy() == 1
-    probabilities = get_population_probabilities().reindex(y.index.astype(str)).to_numpy()
+def operating_curve(capacity: Optional[int] = None, cost_per_visit: float = 0.0, value_per_theft: float = 0.0) -> Dict[str, Any]:
+    """
+    For thresholds 0.01-0.99: validation precision and recall, and in the operational population the
+    customers flagged, the visits possible within ``capacity`` (the highest-ranked first), the thefts
+    those visits should find (sum of their calibrated probabilities) and the net value.
+    """
+    y, _ = _validation_arrays()
+    ranked = get_population_probabilities().to_numpy()  # descending
+    expected = np.r_[0.0, np.cumsum(ranked)]
     points = []
-    for threshold in np.round(np.arange(0.02, 0.99, 0.02), 2):
-        flagged = probabilities >= threshold
-        tp, fp = int((flagged & y_true).sum()), int((flagged & ~y_true).sum())
-        fn, tn = int((~flagged & y_true).sum()), int((~flagged & ~y_true).sum())
+    for threshold in np.round(np.arange(0.01, 1.0, 0.01), 2):
+        flagged = int((ranked >= threshold).sum())
+        visits = flagged if capacity is None else min(flagged, int(capacity))
+        caught = float(expected[visits])
         points.append({
-            "threshold": float(threshold), "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-            "precision": tp / (tp + fp) if tp + fp else 1.0,
-            "recall": tp / (tp + fn) if tp + fn else 0.0,
+            "threshold": float(threshold), **_validation_point(float(threshold)),
+            "population_flagged": flagged, "visits": visits, "expected_thefts_found": caught,
+            "net_value": caught * value_per_theft - visits * cost_per_visit,
         })
-    return points
-
-
-@lru_cache(maxsize=1)
-def score_distribution() -> Dict[str, Any]:
-    """20-bin histogram of theft probabilities, split by the dataset label."""
-    _, y = get_feature_matrix()
-    probabilities = get_population_probabilities().reindex(y.index.astype(str)).to_numpy()
-    labels = y.to_numpy()
-    edges = np.linspace(0.0, 1.0, 21)
     return {
-        "edges": edges.round(4).tolist(),
-        "honest": np.histogram(probabilities[labels == 0], bins=edges)[0].astype(int).tolist(),
-        "theft": np.histogram(probabilities[labels == 1], bins=edges)[0].astype(int).tolist(),
-        "threshold": get_decision_threshold(),
+        "validation_customers": int(len(y)), "validation_theft": int(y.sum()),
+        "population_customers": int(len(ranked)), "capacity": capacity,
+        "cost_per_visit": cost_per_visit, "value_per_theft": value_per_theft,
+        "threshold": get_decision_threshold(), "trained_threshold": get_trained_threshold(),
+        "points": points,
     }
+
+
+def score_distribution() -> Dict[str, Any]:
+    """20-bin histogram of calibrated probabilities over the operational population (no labels)."""
+    probabilities = get_population_probabilities().to_numpy()
+    edges = np.linspace(0.0, 1.0, 21)
+    return {"edges": edges.round(4).tolist(), "counts": np.histogram(probabilities, bins=edges)[0].astype(int).tolist(),
+            "threshold": get_decision_threshold()}
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +243,7 @@ def get_shap_explainer():
 
 
 def _shap_matrix(features: pd.DataFrame) -> np.ndarray:
-    values = get_shap_explainer().shap_values(features[get_feature_names()])
+    values = get_shap_explainer().shap_values(_aligned(features))
     if isinstance(values, list):
         values = values[-1]
     return np.asarray(values, dtype=float).reshape(len(features), -1)
@@ -243,29 +272,32 @@ def _reasons(features: pd.Series, contributions: np.ndarray, top_n: Optional[int
 
 
 def _customer_features(customer_id: str) -> pd.DataFrame:
-    X, _ = get_feature_matrix()
+    X = get_feature_matrix()
     if customer_id not in X.index:
         raise NotFoundError(f"Unknown customer_id: {customer_id}")
     return X.loc[[customer_id], get_feature_names()]
 
 
 def explain_customer(customer_id: str) -> Dict[str, Any]:
-    """Every feature's SHAP contribution (log-odds), largest first; base + sum = logit(probability)."""
+    """Every feature's SHAP contribution to the raw score (log-odds): base + sum = logit(raw score)."""
     features = _customer_features(customer_id)
-    contributions = _shap_matrix(features)[0]
+    raw = raw_scores(features)
     return {
         "customer_id": customer_id,
-        "probability": float(predict_proba(features)[0]),
+        "probability": float(calibrate(raw)[0]),
+        "raw_score": float(raw[0]),
         "base_value": _base_value(),
-        "contributions": _reasons(features.iloc[0], contributions),
+        "contributions": _reasons(features.iloc[0], _shap_matrix(features)[0]),
     }
 
 
 def _prediction(features: pd.DataFrame, threshold: Optional[float]) -> Dict[str, Any]:
     threshold = get_decision_threshold() if threshold is None else threshold
-    probability = float(predict_proba(features)[0])
+    raw = raw_scores(features)
+    probability = float(calibrate(raw)[0])
     return {
         "probability": probability,
+        "raw_score": float(raw[0]),
         "prediction": int(probability >= threshold),
         "threshold": threshold,
         "risk_tier": risk_tier(probability, threshold),
@@ -277,21 +309,28 @@ def predict_customer(customer_id: str, threshold: Optional[float] = None) -> Dic
     return {"customer_id": customer_id, **_prediction(_customer_features(customer_id), threshold)}
 
 
-def predict_features(features: Dict[str, float], threshold: Optional[float] = None) -> Dict[str, Any]:
+def require_features(columns) -> None:
+    """Every model feature must be present; a missing column would silently count as a missing reading."""
+    missing = [name for name in get_feature_names() if name not in set(columns)]
+    if missing:
+        shown = ", ".join(missing[:12]) + (f" and {len(missing) - 12} more" if len(missing) > 12 else "")
+        raise FeatureInputError(f"{len(missing)} of the {len(get_feature_names())} model features are missing: {shown}")
+
+
+def predict_features(features: Dict[str, Optional[float]], threshold: Optional[float] = None) -> Dict[str, Any]:
+    require_features(features)
     names = get_feature_names()
-    frame = pd.DataFrame([[features.get(name, np.nan) for name in names]], columns=names, dtype=float)
+    frame = pd.DataFrame([[features[name] for name in names]], columns=names, dtype=float)
     return {"customer_id": None, **_prediction(frame, threshold)}
 
 
-@lru_cache(maxsize=1)
-def get_flagged_drivers() -> Dict[str, Dict[str, Any]]:
-    """Strongest SHAP driver towards theft for every customer at or above the threshold."""
+@lru_cache(maxsize=4)
+def _flagged_drivers(population_id: str, threshold: float) -> Dict[str, Dict[str, Any]]:
     probabilities = get_population_probabilities()
-    flagged = probabilities[probabilities >= get_decision_threshold()].index
+    flagged = probabilities[probabilities >= threshold].index
     if len(flagged) == 0:
         return {}
-    X, _ = get_feature_matrix()
-    frame = X.loc[flagged, get_feature_names()]
+    frame = get_feature_matrix().loc[flagged, get_feature_names()]
     values = _shap_matrix(frame)
     drivers = {}
     for row, customer_id in enumerate(flagged):
@@ -300,10 +339,14 @@ def get_flagged_drivers() -> Dict[str, Dict[str, Any]]:
     return drivers
 
 
-@lru_cache(maxsize=1)
-def global_drivers(sample_size: int = 500, top_n: int = 15) -> Dict[str, Any]:
-    """Mean |SHAP| per feature over a fixed sample of served customers, with the direction of effect."""
-    X, _ = get_feature_matrix()
+def get_flagged_drivers() -> Dict[str, Dict[str, Any]]:
+    """Strongest SHAP driver towards theft for every customer at or above the threshold."""
+    return _flagged_drivers(active_population()["id"], get_decision_threshold())
+
+
+@lru_cache(maxsize=2)
+def _global_drivers(population_id: str, sample_size: int = 500, top_n: int = 15) -> Dict[str, Any]:
+    X = get_feature_matrix()
     sample = X[get_feature_names()].sample(n=min(sample_size, len(X)), random_state=0)
     values = _shap_matrix(sample)
     drivers = []
@@ -320,72 +363,28 @@ def global_drivers(sample_size: int = 500, top_n: int = 15) -> Dict[str, Any]:
     return {"sample_size": int(len(sample)), "drivers": drivers[:top_n]}
 
 
-# ---------------------------------------------------------------------------
-# Training record
-# ---------------------------------------------------------------------------
-
-def _artifact(name: str) -> Dict[str, Any]:
-    path = get_paths()["artifacts"] / name
-    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-
-
-def model_comparison() -> List[Dict[str, Any]]:
-    """
-    Every pipeline compared in training, scored on the same test customers at its own
-    validation-chosen threshold, with computational cost and, when scripts/significance.py
-    has run, the Holm-adjusted paired t-test p-value against the proposed pipeline.
-    """
-    path = get_paths()["baselines"]
-    results = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    tests = _artifact("significance.json").get("tests", {})
-    keys = ("threshold", "auc", "pr_auc", "precision", "recall", "f1", "gmean", "mcc",
-            "training_time", "inference_ms_per_customer", "model_size_mb")
-    rows = []
-    for name, result in results.items():
-        p_values = {metric: tests.get(metric, {}).get(name, {}).get("t_test_p_holm") for metric in ("pr_auc", "f1")}
-        rows.append({
-            "model": name, "label": result["label"], "served": bool(result.get("served")),
-            "preprocessing": result["preprocessing"], "treatment": result["treatment"],
-            **{key: float(result[key]) for key in keys},
-            "p_value_pr_auc": p_values["pr_auc"], "p_value_f1": p_values["f1"],
-        })
-    return rows
-
-
-def resampling_effect() -> Dict[str, Any]:
-    """What SMOTE and SMOTE+ENN did to the training data (Objective 1), from training."""
-    return _artifact("resampling.json")
-
-
-def training_summary() -> Dict[str, Any]:
-    saved = get_saved_metrics()
-    keys = ("pipeline", "pipeline_label", "model_version", "trained_at", "quick_mode", "n_trials", "cv_metric",
-            "cv_best_score", "train_customers", "validation_customers", "test_customers", "n_features",
-            "auc", "pr_auc", "precision", "recall", "f1", "threshold")
-    return {
-        **{key: saved.get(key) for key in keys},
-        "stages": saved.get("stages", []),
-        "best_params": _artifact("best_params.json"),
-    }
+def global_drivers() -> Dict[str, Any]:
+    """Mean |SHAP| per feature over a fixed sample of the population, with the direction of effect."""
+    return _global_drivers(active_population()["id"])
 
 
 # ---------------------------------------------------------------------------
-# Second opinion: LIME (proposal section 3.12)
+# Explanation consistency: LIME (proposal section 3.12)
 # ---------------------------------------------------------------------------
 
 EXPLANATION_CHECK_TOP_N = 5
+CONSISTENCY_NOTE = ("SHAP and LIME both describe what this model associates with theft. Agreement between them "
+                    "says the explanation is stable, not that it is causal or that theft occurred.")
 
 
-@lru_cache(maxsize=1)
-def get_lime_explainer():
-    """LIME explainer over the served customers (gaps filled with medians, as LIME needs)."""
+@lru_cache(maxsize=2)
+def _lime_explainer(population_id: str):
     from lime.lime_tabular import LimeTabularExplainer
 
-    X, _ = get_feature_matrix()
-    background = X[get_feature_names()]
+    background = get_feature_matrix()[get_feature_names()]
     medians = background.median().fillna(0.0)
     # Decile bins: with LIME's default quartiles its surrogate leans on magnitude features and agrees
-    # with SHAP on fewer cases (8 vs 14 of the 30 highest-risk served customers).
+    # with SHAP on fewer cases (8 vs 14 of the 30 highest-risk customers in the sample population).
     explainer = LimeTabularExplainer(background.fillna(medians).to_numpy(), feature_names=get_feature_names(),
                                      class_names=["honest", "theft"], mode="classification", discretizer="decile",
                                      random_state=0)
@@ -393,19 +392,14 @@ def get_lime_explainer():
 
 
 @lru_cache(maxsize=256)
-def explanation_check(customer_id: str) -> Dict[str, Any]:
-    """
-    Compare SHAP's and LIME's strongest features for one customer. They agree when at least
-    3 of the top 5 coincide and SHAP's strongest feature is in LIME's top 5 with the same
-    direction; otherwise the case should be reviewed by a person before acting on either.
-    """
+def _explanation_check(population_id: str, customer_id: str) -> Dict[str, Any]:
     names = get_feature_names()
     shap_top = explain_customer(customer_id)["contributions"][:EXPLANATION_CHECK_TOP_N]
-    explainer, medians = get_lime_explainer()
+    explainer, medians = _lime_explainer(population_id)
     row = _customer_features(customer_id).iloc[0].fillna(medians)
 
     def class_probabilities(rows: np.ndarray) -> np.ndarray:
-        theft = predict_proba(pd.DataFrame(rows, columns=names))
+        theft = raw_scores(pd.DataFrame(rows, columns=names))
         return np.column_stack([1 - theft, theft])
 
     lime = explainer.explain_instance(row.to_numpy(dtype=float), class_probabilities,
@@ -415,26 +409,34 @@ def explanation_check(customer_id: str) -> Dict[str, Any]:
     shared = [c["feature"] for c in shap_top if c["feature"] in lime_weights]
     strongest = shap_top[0]
     same_direction = strongest["feature"] in lime_weights and np.sign(lime_weights[strongest["feature"]]) == np.sign(strongest["shap_value"])
-    agrees = len(shared) >= 3 and bool(same_direction)
+    consistent = len(shared) >= 3 and bool(same_direction)
     return {
         "customer_id": customer_id,
         "top_n": EXPLANATION_CHECK_TOP_N,
         "shap": [{"feature": c["feature"], "label": c["label"], "weight": c["shap_value"]} for c in shap_top],
         "lime": [{"feature": f, "label": feature_label(f), "weight": lime_weights[f]} for f in lime_top],
         "shared": shared,
-        "agrees": agrees,
+        "consistent": consistent,
         "message": (f"SHAP and LIME agree on {len(shared)} of the top {EXPLANATION_CHECK_TOP_N} signals."
-                    if agrees else
+                    if consistent else
                     f"SHAP and LIME share only {len(shared)} of the top {EXPLANATION_CHECK_TOP_N} signals"
-                    f"{'' if same_direction else ' and disagree on the strongest one'}: review this case manually."),
+                    f"{'' if same_direction else ' and disagree on the strongest one'}: treat the explanation with care."),
+        "note": CONSISTENCY_NOTE,
     }
 
 
+def explanation_check(customer_id: str) -> Dict[str, Any]:
+    """
+    Compare SHAP's and LIME's strongest features for one customer (both on the raw score). They are
+    consistent when at least 3 of the top 5 coincide and SHAP's strongest feature is in LIME's top 5
+    with the same direction.
+    """
+    return _explanation_check(active_population()["id"], customer_id)
+
+
 _CACHED = (
-    data_service.get_wide_data, data_service.get_feature_matrix, get_trained_model, get_feature_names,
-    get_saved_metrics, _operating_threshold_override, get_population_probabilities, get_model_metrics,
-    operating_curve, score_distribution, get_shap_explainer, get_flagged_drivers, global_drivers,
-    data_service.get_pipeline_spec, get_lime_explainer, explanation_check,
+    integrity_problems, get_trained_model, _population_probabilities, _validation_arrays, get_shap_explainer,
+    _flagged_drivers, _global_drivers, _lime_explainer, _explanation_check, *data_service.CACHED,
 )
 
 

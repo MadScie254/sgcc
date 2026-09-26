@@ -1,0 +1,64 @@
+{
+  "published_at": "2026-09-26T10:11:03+00:00",
+  "model_version": "3.0.0",
+  "pipeline": "xgboost",
+  "quick_mode": false,
+  "files": {
+    "models/xgb_best.ubj": {
+      "sha256": "5878b0373e57ce0fef1d410fc8fa281893e00c5076f1e098194e108254be6e64",
+      "bytes": 1376217
+    },
+    "artifacts/pipeline.json": {
+      "sha256": "1dc87a346a1b845c275a981bbd3034b0d32a004cf5486789f72ea94dd010ff00",
+      "bytes": 2929
+    },
+    "artifacts/calibration.json": {
+      "sha256": "d2c77239c46ebf3648d3c8a1126fea76a9cb4bf48f25727a7f5297a625598e7b",
+      "bytes": 29441
+    },
+    "artifacts/best_params.json": {
+      "sha256": "a15c810207a047b334233d52de0da4085c5dd87695db0c6c8077d49e626937d4",
+      "bytes": 349
+    },
+    "artifacts/tuning.json": {
+      "sha256": "b619fb7fba6f35dffd354416ba2652c04d8163b9e9cce992ef20d1897c6be1dd",
+      "bytes": 3305
+    },
+    "models/baselines/comparison_results.json": {
+      "sha256": "54dec031e326f84cdb07727c0aabe07bdebf1a17ca5ab74fa663cff67e0fb35c",
+      "bytes": 7171
+    },
+    "artifacts/resampling.json": {
+      "sha256": "4cc65b5f630bedeb88b3e467b467fa519d3f5ff3a43b21bf5d2b7c873aed5423",
+      "bytes": 1722
+    },
+    "artifacts/preprocessing_log.json": {
+      "sha256": "760d76d4741f364440f9e30f99353fa18e0f8445f26bbf3b8823d3ea5637c29e",
+      "bytes": 332
+    },
+    "artifacts/learning_curves.json": {
+      "sha256": "3211ebf320bbeaf0eb8bf7fbe1efc95c478e452094a825bdcd05d5d88a70630d",
+      "bytes": 34980
+    },
+    "artifacts/feature_importance.csv": {
+      "sha256": "cfebb7a2f88b3f6c275f8d126e8e66960fa77b1931d31f6434cb5a7895b4e19c",
+      "bytes": 3032
+    },
+    "artifacts/predictions/validation.csv.gz": {
+      "sha256": "3b7f21b47080982547e2ca412d3e721eb15f9bf0969943595aef3bf936d88c8b",
+      "bytes": 447464
+    },
+    "artifacts/predictions/test.csv.gz": {
+      "sha256": "bed9a9a35083e7f6cb4a0e97b0f03f905bd03f69b12a10894c84fd05a4e86cdf",
+      "bytes": 446810
+    },
+    "data/sgcc_demo.csv.gz": {
+      "sha256": "9b73fd1a2de7dd2915d5864d8095eb2b82fff1dcaef92b269193c3bed436f1e0",
+      "bytes": 3624492
+    },
+    "artifacts/metrics.json": {
+      "sha256": "12d63bb15da9224478c06eb22a417a781e37702ce0a15d623c4f066b5f58568f",
+      "bytes": 2705
+    }
+  }
+}

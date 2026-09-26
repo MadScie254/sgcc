@@ -7,9 +7,9 @@ import { cn } from "@/lib/cn";
 import { ApiError, Button, Card, CardHeader, Empty, PageHeader, Segmented, Skeleton } from "@/components/ui";
 
 const SCORING_STAGES: Array<{ key: string; name: string; about: string; input: string }> = [
-  { key: "ingest", name: "Ingest reads", about: "Loads each customer's daily kWh series, parses the date header and sorts days chronologically. Missing reads stay missing: they are signal, not noise.", input: "data/sgcc_demo.csv.gz" },
-  { key: "features", name: "Build features", about: "Computes 85 behavioural features per customer: gaps and zero runs, day-over-day drops, trends, year-over-year ratios, change points and a 34-month usage profile.", input: "Daily series" },
-  { key: "score", name: "Score", about: "The tuned XGBoost model assigns every customer a theft probability. Customers at or above the operating threshold become cases.", input: "Feature matrix" },
+  { key: "ingest", name: "Ingest reads", about: "Loads the population in service (the unlabelled SGCC sample, or readings a supervisor promoted), parses the date header and sorts days chronologically. Missing reads stay missing: they are signal, not noise.", input: "Population in service" },
+  { key: "features", name: "Build features", about: "Computes 87 behavioural features per customer with the settings frozen at training: gaps and zero runs, day-over-day drops, trends, year-over-year ratios, change points and a 34-month usage profile.", input: "Daily series" },
+  { key: "score", name: "Score", about: "The served XGBoost model scores every customer; Platt scaling, fitted on validation customers, turns the score into a calibrated theft probability. Customers at or above the operating threshold become cases.", input: "Feature matrix" },
   { key: "explain", name: "Explain", about: "TreeSHAP breaks each flagged score into per-feature contributions, so every case arrives with the reasons behind it.", input: "Model + features" },
   { key: "route", name: "Route cases", about: "Opens a case for each newly flagged customer, keeping the status and notes of existing cases.", input: "Scores + explanations" },
 ];
@@ -20,10 +20,10 @@ const TRAINING_ABOUT: Record<string, string> = {
   Features: "The same features as scoring, on raw and on cleaned readings, grouped as statistical, temporal, trend and anomaly.",
   Split: "Customers split 70 / 15 / 15 into training, validation and test, stratified by label.",
   Resample: "Objective 1: measures class counts, separability and boundary noise before and after SMOTE and SMOTE+ENN on the training customers.",
-  Tune: "Optuna searches the XGBoost hyperparameters of both XGBoost pipelines on 5-fold cross-validated PR-AUC; SMOTE+ENN is redone inside every fold.",
-  Validate: "Fits all five pipelines (tuned XGBoost with early stopping), picks each one's F1-maximising threshold on validation, and serves the XGBoost pipeline with the higher validation PR-AUC.",
-  Evaluate: "Scores every pipeline once on the untouched test customers: effectiveness, training time, inference time and model size.",
-  Publish: "Writes the model, its pipeline spec, all results and the held-out sample the dashboard serves.",
+  Tune: "Optuna searches the hyperparameters of both XGBoost pipelines on the mean PR-AUC of 5 cross-validation folds, each scored separately; SMOTE+ENN is redone inside every fold.",
+  Validate: "Fits all five pipelines (tuned XGBoost with early stopping), calibrates each on validation (Platt scaling), picks each one's F1-maximising threshold on the calibrated validation probabilities, and serves the XGBoost pipeline with the higher validation PR-AUC.",
+  Evaluate: "Scores every pipeline once on the untouched test customers: effectiveness, calibration, training time, inference time and model size. The predictions are saved for the significance tests.",
+  Publish: "Stages the model, its frozen pipeline spec, all results and an unlabelled population sample, moves them into place, and writes a SHA-256 manifest last; the API refuses to score if any file changes.",
 };
 
 type StageState = "done" | "running" | "failed" | "idle";
@@ -147,17 +147,17 @@ export function PipelinePage() {
               <div className="rounded-lg bg-night px-4 py-3.5 font-mono text-xs leading-relaxed text-night-text">
                 {training.data ? (
                   <>
-                    <div>model v{training.data.model_version ?? "—"} · {training.data.n_trials ?? "—"} trials · CV {training.data.cv_metric ?? "—"} {fmtNum(training.data.cv_best_score)}</div>
-                    <div>serving: {training.data.pipeline_label ?? "—"}</div>
+                    <div>model v{training.data.model_version ?? "—"} · {training.data.n_trials ?? "—"} trials · CV {training.data.cv_metric ?? "—"} {fmtNum(training.data.cv_best_score)} (mean of {training.data.cv_fold_scores?.length ?? "—"} folds)</div>
+                    <div>serving: {training.data.pipeline_label ?? "—"} · trained on {training.data.device ?? "cpu"}</div>
                     <div>train {fmtInt(training.data.train_customers)} · validation {fmtInt(training.data.validation_customers)} · test {fmtInt(training.data.test_customers)} customers · {training.data.n_features ?? "—"} features</div>
-                    <div>test ROC-AUC {fmtNum(training.data.auc)} · PR-AUC {fmtNum(training.data.pr_auc)} · F1 {fmtNum(training.data.f1)} @ τ {fmtNum(training.data.threshold)}</div>
+                    <div>code {training.data.provenance.code?.commit?.slice(0, 10) ?? "unknown"} · data sha256 {training.data.provenance.data_sha256?.slice(0, 12) ?? "unknown"}</div>
                     <div className="mt-2 text-night-muted">best params: {Object.entries(training.data.best_params).map(([k, v]) => `${k}=${+v.toPrecision(3)}`).join(", ") || "—"}</div>
                   </>
                 ) : training.isError ? "Training record unavailable." : "…"}
               </div>
               <div className="flex flex-col gap-1.5 text-[13px] text-ink-2">
                 <span>Training rewrites the served model, so it runs from the command line rather than the dashboard:</span>
-                <pre className="m-0 overflow-x-auto rounded-lg bg-surface-alt px-3.5 py-2.5 font-mono text-xs text-ink">{"python -m src.train --quick   # smoke run: 25% of customers, 5 trials\npython -m src.train           # full run: 40 trials, 5-fold CV"}</pre>
+                <pre className="m-0 overflow-x-auto rounded-lg bg-surface-alt px-3.5 py-2.5 font-mono text-xs text-ink">{"python -m src.train --quick         # smoke run into artifacts/quick/\npython -m src.train                 # full run: 40 trials, 5-fold CV\npython -m src.train --device cuda   # XGBoost on an NVIDIA GPU"}</pre>
                 <span>Then press <strong className="font-medium text-ink">Run scoring now</strong> on the Daily scoring tab to load the new model.</span>
               </div>
             </>
@@ -195,7 +195,7 @@ export function PipelinePage() {
                         {run.status === "succeeded" ? <CheckCircle2 className="h-4 w-4 text-cobalt" aria-label="succeeded" /> : <XCircle className="h-4 w-4 text-risk" aria-label={run.status} />}
                         {fmtDateTime(run.finished_at)}
                       </td>
-                      <td className="capitalize text-ink-2">{run.trigger}</td>
+                      <td className="text-ink-2"><span className="capitalize">{run.trigger}</span>{run.actor && run.actor !== "system" ? <span className="block text-[11px] text-ink-3">{run.actor}</span> : null}</td>
                       <td className="font-mono">{fmtSeconds(run.seconds)}</td>
                       <td className="text-right font-mono">{run.summary ? fmtInt(run.summary.flagged) : "—"}</td>
                     </tr>

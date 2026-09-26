@@ -1,4 +1,8 @@
-"""PDF reports: portfolio overview, uploaded-dataset results, and a customer case file.
+"""PDF reports.
+
+Operations (no labels): the portfolio overview, an uploaded dataset's results, and a
+customer's case file. Research: the test-set evaluation, calibration and the
+statistical comparison of the pipelines. The two are never mixed in one report.
 
 Built with fpdf2 core fonts only (no network, no font files). Text is limited to
 Latin-1, so a few typographic characters are replaced before rendering.
@@ -8,26 +12,26 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
-from threading import Lock
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 import fpdf
 from fpdf import FPDF, FontFace
 from fpdf.enums import TableCellFillMode, XPos, YPos
 
-from .config import get_paths
+from sqlalchemy import delete, insert, select
+
+from . import db
+from . import research
+from .blobstore import get_blobstore
 from .data import get_customer_timeseries
-from .datasets import get_dataset, load_dataset, summarize
+from .datasets import get_dataset, load_dataset, retention_days, summarize
 from .errors import NotFoundError
-from .model import explain_customer, explanation_check, get_decision_threshold, get_model_metrics, model_comparison
+from .model import explain_customer, explanation_check, get_decision_threshold, get_model_metrics, threshold_preview
 from .operations import get_case, list_cases
-from .storage import read_json, write_json
 
 MIN_FPDF_VERSION = (2, 7, 8)
-_ID_PATTERN = re.compile(r"(portfolio|dataset|case)-[0-9]{14}-[0-9a-f]{8}")
-_INDEX_LOCK = Lock()
-MAX_REPORTS = 500  # older PDFs are deleted
+_ID_PATTERN = re.compile(r"(portfolio|dataset|case|research)-[0-9]{14}-[0-9a-f]{8}")
 
 INK, INK_2, LINE, NIGHT, COBALT = (20, 22, 27), (79, 85, 97), (228, 226, 220), (16, 19, 23), (35, 70, 200)
 _REPLACEMENTS = {"→": "->", "—": "-", "–": "-", "τ": "threshold ", "≈": "~", "’": "'", "“": '"', "”": '"', "…": "..."}
@@ -190,52 +194,44 @@ class _Report(FPDF):
 
 RESPONSIBLE_USE = ("A flag is a reason to inspect, not evidence of theft. Conclusions rest on the field "
                    "investigation; a customer found honest is cleared and can appeal (proposal section 3.13).")
+PROBABILITY_NOTE = ("Probabilities are calibrated on validation customers: among customers scored 0.30, about 30 in "
+                    "100 were thieves there. Expected counts are sums of these probabilities, not observed outcomes.")
 
 
 def _footer(metrics: Dict[str, Any]) -> str:
-    return f"Model xgb v{metrics['model_version']}  ·  threshold in service {metrics['threshold']:.3f}"
+    return f"Model {metrics['pipeline']} v{metrics['model_version']}  ·  threshold in service {metrics['threshold']:.3f}"
 
 
 def _portfolio(generated: str) -> tuple:
     metrics = get_model_metrics()
     cases = list_cases(status=None, tier=None, search=None, page=1, page_size=30)
-    m, cm = metrics["metrics"], metrics["confusion_matrix"]
+    preview = threshold_preview(metrics["threshold"])["validation"]
+    population = metrics["population"]
     pdf = _Report("Portfolio risk report", f"Generated {generated}  ·  {metrics['customers_monitored']:,} customers", _footer(metrics))
 
     pdf.heading("Summary")
     pdf.paragraph(
-        f"{metrics['flagged']:,} of {metrics['customers_monitored']:,} served customers are at or above the operating "
+        f"{metrics['flagged']:,} of {metrics['customers_monitored']:,} customers are at or above the operating "
         f"threshold ({metrics['threshold']:.3f}); {metrics['risk_tier_distribution']['high']:,} are high risk. "
-        f"Among flagged customers, {cm['tp']:,} carry a theft label in the dataset "
-        f"({_pct(cm['tp'] / max(cm['tp'] + cm['fp'], 1))} hit rate against a {_pct(metrics['base_rate'])} base rate)."
+        f"Inspecting every flagged customer should find about {metrics['expected_thefts_flagged']:.0f} thefts "
+        f"(an estimate from calibrated probabilities)."
     )
     pdf.facts([
         ("Customers monitored", f"{metrics['customers_monitored']:,}"), ("Flagged", f"{metrics['flagged']:,}"),
         ("High risk", f"{metrics['risk_tier_distribution']['high']:,}"), ("Medium risk", f"{metrics['risk_tier_distribution']['medium']:,}"),
+        ("Expected thefts, flagged", f"{metrics['expected_thefts_flagged']:.1f}"), ("Expected thefts, all", f"{metrics['expected_thefts_total']:.1f}"),
         ("Threshold in service", f"{metrics['threshold']:.3f}"), ("Trained threshold", f"{metrics['trained_threshold']:.3f}"),
+        ("Population", population["filename"]), ("Source", "training sample" if population["source"] == "sample" else "uploaded readings"),
     ])
+    pdf.paragraph(PROBABILITY_NOTE)
 
-    pdf.heading("Model quality (hold-out test set)")
+    pdf.heading("What the threshold means (validation customers)")
+    pdf.paragraph("Measured on the validation customers the threshold was chosen on; the research report has the "
+                  "test-set evaluation.")
     pdf.facts([
-        ("ROC-AUC", _num(m["auc"])), ("PR-AUC", _num(m["pr_auc"])),
-        ("Precision", _num(m["precision"])), ("Recall", _num(m["recall"])),
-        ("F1", _num(m["f1"])), ("MCC", _num(m["mcc"])),
+        ("Precision", _num(preview["precision"])), ("Recall", _num(preview["recall"])),
+        ("Thefts caught", f"{preview['tp']:,} of {preview['tp'] + preview['fn']:,}"), ("Wasted visits", f"{preview['fp']:,}"),
     ])
-
-    comparison = model_comparison()
-    if comparison:
-        pdf.heading("Pipelines compared on the test customers")
-        pdf.grid(["Pipeline", "PR-AUC", "Recall", "Precision", "F1", "MCC", "ms/customer"],
-                 [[("* " if r["served"] else "") + r["label"], _num(r["pr_auc"]), _num(r["recall"]), _num(r["precision"]),
-                   _num(r["f1"]), _num(r["mcc"]), f"{r['inference_ms_per_customer']:.3f}"] for r in comparison],
-                 widths=[64, 18, 18, 20, 16, 16, 26], align=["LEFT"] + ["RIGHT"] * 6)
-        pdf.paragraph("* the pipeline in service. Each pipeline is scored at its own threshold, chosen on validation customers.")
-
-    pdf.heading("Outcome on served customers at the operating threshold")
-    pdf.grid(["", "Actually theft", "Actually honest"],
-             [["Flagged", f"{cm['tp']:,} caught", f"{cm['fp']:,} wasted visits"],
-              ["Not flagged", f"{cm['fn']:,} missed", f"{cm['tn']:,} correctly cleared"]],
-             widths=[40, 69, 69])
 
     pdf.heading("Case workflow")
     counts = cases["status_counts"]
@@ -263,11 +259,10 @@ def _dataset(generated: str, dataset_id: str) -> tuple:
 
     pdf.heading("Dataset")
     pdf.facts([
-        ("File", item["filename"]), ("Uploaded", item["uploaded_at"].replace("T", " ")[:16]),
+        ("File", item["filename"]), ("Uploaded", f"{item['uploaded_at'].replace('T', ' ')[:16]} by {item['uploaded_by']}"),
         ("Format", "SGCC meter data" if summary["format"] == "consumption" else "Model features"),
         ("Customers", f"{summary['customers']:,}"),
-        ("Days of readings" if summary["days"] else "Features found",
-         f"{summary['days']:,}" if summary["days"] else f"{summary['features_found']} of {summary['features_expected']}"),
+        ("Days of readings" if summary["days"] else "Features", f"{summary['days']:,}" if summary["days"] else f"{summary['features_expected']}"),
         ("Labels", "yes" if summary["labelled"] else "no"),
     ])
 
@@ -279,21 +274,19 @@ def _dataset(generated: str, dataset_id: str) -> tuple:
     ])
     if summary["label_metrics"]:
         lm = summary["label_metrics"]
-        pdf.heading("Agreement with the file's labels")
+        pdf.heading("Agreement with the file's own labels")
         pdf.facts([
             ("Labelled theft", f"{lm['theft']:,}"), ("Theft caught", f"{lm['caught']:,}"),
             ("Precision", _num(lm["precision"])), ("Recall", _num(lm["recall"])),
             ("ROC-AUC", _num(lm["roc_auc"])), ("PR-AUC", _num(lm["pr_auc"])),
         ])
-    if summary["format"] == "features" and summary["features_found"] < summary["features_expected"]:
-        pdf.paragraph(f"{summary['features_expected'] - summary['features_found']} model features were absent "
-                      "and treated as missing readings.")
 
     pdf.heading(f"Top {len(summary['top'])} customers by theft probability")
     headings = ["#", "Customer", "Probability", "Tier"] + (["Label"] if summary["labelled"] else [])
     rows = [[i + 1, t["customer_id"][:32], f"{t['probability']:.3f}", t["risk_tier"]] + ([_LABEL_NAMES[t["label"]]] if summary["labelled"] else [])
             for i, t in enumerate(summary["top"])]
     pdf.grid(headings, rows, widths=[10, 80, 30, 30] + ([28] if summary["labelled"] else []))
+    pdf.paragraph(PROBABILITY_NOTE)
     return pdf, item["filename"]
 
 
@@ -322,6 +315,10 @@ def _case(generated: str, customer_id: str) -> tuple:
         ("Rank", f"{case['rank']:,} of {case['population']:,}"), ("Risk tier", case["risk_tier"]),
         ("Flagged", "yes" if case["flagged"] else "no"), ("Case status", case["status"]),
     ])
+    if case["resolution"]:
+        r = case["resolution"]
+        pdf.paragraph(f"Resolved as {r['outcome']} by {r['by']} on {r['at'].replace('T', ' ')[:16]} UTC: {r['reason']} "
+                      f"(evidence: {r['evidence']}).")
     if case["note"]:
         pdf.paragraph(f"Analyst note: {case['note']}")
 
@@ -331,84 +328,153 @@ def _case(generated: str, customer_id: str) -> tuple:
         ("Days read", f"{len(observed):,} of {len(points):,} ({_pct(len(observed) / max(len(points), 1), 0)})"),
         ("Longest gap", f"{longest:,} days"),
         ("Use while reporting", f"{sum(p['kwh'] for p in observed) / len(observed):.2f} kWh/day" if observed else "-"),
-        ("Dataset label", "theft" if series["label"] == 1 else "honest"),
+        ("", ""),
     ])
     pdf.monthly_chart([(key, sum(v) / len(v) if v else None) for key, v in months.items()])
 
     pdf.heading("Why the model scored this customer")
-    pdf.paragraph("SHAP contributions in log-odds: positive values push towards theft, negative away from it. "
-                  f"Starting from the base rate ({explanation['base_value']:+.2f} log-odds), the contributions add up to "
-                  f"the predicted probability of {explanation['probability']:.3f}.")
+    pdf.paragraph("SHAP contributions to the model's raw score, in log-odds: positive values push towards theft, "
+                  f"negative away from it. From the base value ({explanation['base_value']:+.2f}) they add up to the raw "
+                  f"score {explanation['raw_score']:.3f}, which calibration maps to the probability "
+                  f"{explanation['probability']:.3f} without changing the ranking.")
     pdf.grid(["Signal", "Value", "Contribution"],
              [[c["label"], c["display_value"], f"{c['shap_value']:+.3f}"] for c in explanation["contributions"][:10]],
              widths=[82, 62, 34], align=["LEFT", "LEFT", "RIGHT"])
 
     check = explanation_check(customer_id)
-    pdf.heading("Second opinion (LIME)")
+    pdf.heading("Explanation consistency (LIME)")
     pdf.paragraph(f"{check['message']} LIME's strongest signals: "
-                  + ", ".join(f"{a['label']} ({a['weight']:+.3f})" for a in check["lime"]) + ".")
+                  + ", ".join(f"{a['label']} ({a['weight']:+.3f})" for a in check["lime"]) + f". {check['note']}")
 
     pdf.heading("Case history")
-    history = case["history"] or [{"at": "", "event": "No case activity yet."}]
-    pdf.grid(["When (UTC)", "Event"], [[h["at"].replace("T", " ")[:16], h["event"]] for h in history], widths=[40, 138])
+    history = case["history"] or [{"at": "", "actor": "", "event": "No case activity yet."}]
+    pdf.grid(["When (UTC)", "Who", "Event"], [[h["at"].replace("T", " ")[:16], h["actor"], h["event"]] for h in history],
+             widths=[34, 28, 116])
     pdf.paragraph(RESPONSIBLE_USE)
     return pdf, customer_id
 
 
+def _interval(bounds: Optional[List[float]]) -> str:
+    return "-" if not bounds else f"{bounds[0]:.3f}-{bounds[1]:.3f}"
+
+
+def _research(generated: str) -> tuple:
+    evaluation = research.evaluation()
+    population = evaluation["population"]
+    m, cm = evaluation["metrics"], evaluation["confusion_matrix"]
+    pdf = _Report("Research evaluation", f"Generated {generated}  ·  {population['description']}",
+                  f"Research record  ·  model {evaluation['pipeline']} v{evaluation['model_version']}")
+
+    pdf.heading("Population")
+    pdf.paragraph(f"All figures in this report describe the {population['description']}. {population['limitation']}")
+
+    pdf.heading(f"Served pipeline: {evaluation['pipeline_label']}")
+    pdf.facts([
+        ("ROC-AUC", _num(m["auc"])), ("PR-AUC", _num(m["pr_auc"])),
+        ("Precision", _num(m["precision"])), ("Recall", _num(m["recall"])),
+        ("F1", _num(m["f1"])), ("MCC", _num(m["mcc"])),
+        ("Threshold", _num(evaluation["threshold"])), ("G-mean", _num(m["gmean"])),
+    ])
+    pdf.grid(["", "Actually theft", "Actually honest"],
+             [["Flagged", f"{cm['tp']:,} caught", f"{cm['fp']:,} wasted visits"],
+              ["Not flagged", f"{cm['fn']:,} missed", f"{cm['tn']:,} correctly cleared"]],
+             widths=[40, 69, 69])
+
+    rows = research.model_comparison()
+    if rows:
+        pdf.heading("Pipelines compared (each at its own validation-chosen threshold)")
+        pdf.grid(["Pipeline", "PR-AUC", "95% CI", "F1", "MCC", "p PR-AUC", "p McNemar"],
+                 [[("* " if r["served"] else "") + r["label"], _num(r["pr_auc"]), _interval(r["pr_auc_ci"]), _num(r["f1"]),
+                   _num(r["mcc"]), _num(r["p_value_pr_auc"]), "-" if r["p_value_mcnemar"] is None else f"{r['p_value_mcnemar']:.2g}"]
+                  for r in rows],
+                 widths=[58, 16, 26, 14, 14, 22, 28], align=["LEFT"] + ["RIGHT"] * 6)
+        significance = research.significance()
+        if significance:
+            pdf.paragraph(f"* the pipeline in service. p-values compare each pipeline with the proposed one: a paired "
+                          f"stratified bootstrap ({significance['resamples']:,} resamples of the test customers) for PR-AUC, "
+                          "and McNemar's exact test on the flag decisions, both Holm-corrected across the four comparisons.")
+
+    calibration = research.calibration()
+    if calibration["pipelines"]:
+        pdf.heading("Calibration on the test customers")
+        pdf.grid(["Pipeline", "Brier raw", "Brier Platt", "ECE raw", "ECE Platt", "ECE isotonic"],
+                 [[r["label"], _num(r["test_raw"]["brier"], 4), _num(r["test_platt"]["brier"], 4), _num(r["test_raw"]["ece"], 4),
+                   _num(r["test_platt"]["ece"], 4), _num(r["test_isotonic"]["ece"], 4)] for r in calibration["pipelines"]],
+                 widths=[62, 22, 24, 22, 22, 26], align=["LEFT"] + ["RIGHT"] * 5)
+        pdf.paragraph("Platt scaling is fitted on the validation customers and served; isotonic regression is shown for comparison.")
+    return pdf, population["description"]
+
+
 # ---------------------------------------------------------------------------
-# Index and files
+# Catalogue and files
 # ---------------------------------------------------------------------------
 
-def _reports_dir():
-    path = get_paths()["reports"]
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def _blob_key(report_id: str) -> str:
+    return f"reports/{report_id}.pdf"
 
 
-def _read_index() -> List[Dict[str, Any]]:
-    return read_json(_reports_dir() / "index.json", [])
-
-
-def generate_report(kind: str, subject_id: Optional[str] = None) -> Dict[str, Any]:
+def generate_report(kind: str, subject_id: Optional[str], actor: str) -> Dict[str, Any]:
     """Render and store a report. `subject_id` is the dataset id or customer id it covers."""
     status = reports_status()
     if not status["available"]:
         raise ReportsUnavailable(status["detail"])
     now = datetime.now(timezone.utc)
     generated = now.strftime("%d %b %Y %H:%M UTC")
-    if kind == "portfolio":
-        pdf, subject = _portfolio(generated)
-    elif kind == "dataset":
-        pdf, subject = _dataset(generated, str(subject_id))
-    elif kind == "case":
-        pdf, subject = _case(generated, str(subject_id))
-    else:
+    builders = {"portfolio": lambda: _portfolio(generated), "dataset": lambda: _dataset(generated, str(subject_id)),
+                "case": lambda: _case(generated, str(subject_id)), "research": lambda: _research(generated)}
+    if kind not in builders:
         raise ValueError(f"Unknown report kind {kind!r}")
+    pdf, subject = builders[kind]()
 
     report_id = f"{kind}-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    path = _reports_dir() / f"{report_id}.pdf"
-    pdf.output(str(path))
-    entry = {"report_id": report_id, "kind": kind, "title": pdf.report_title, "subject": subject,
-             "created_at": now.isoformat(timespec="seconds"), "bytes": path.stat().st_size}
-    with _INDEX_LOCK:
-        index = [entry, *_read_index()]
-        for expired in index[MAX_REPORTS:]:
-            if _ID_PATTERN.fullmatch(str(expired.get("report_id"))):
-                (_reports_dir() / f"{expired['report_id']}.pdf").unlink(missing_ok=True)
-        write_json(_reports_dir() / "index.json", index[:MAX_REPORTS])
+    content = bytes(pdf.output())
+    get_blobstore().put(_blob_key(report_id), content, "application/pdf")
+    entry = {"report_id": report_id, "kind": kind, "title": pdf.report_title, "subject": subject[:200],
+             "created_at": now.isoformat(timespec="milliseconds"), "created_by": actor, "bytes": len(content)}
+    with db.transaction() as connection:
+        connection.execute(insert(db.reports).values(**entry, blob_key=_blob_key(report_id)))
     return entry
 
 
 def list_reports(limit: int = 50) -> List[Dict[str, Any]]:
-    with _INDEX_LOCK:
-        return _read_index()[:limit]
+    with db.transaction() as connection:
+        rows = connection.execute(select(db.reports).order_by(db.reports.c.created_at.desc()).limit(limit)).mappings().all()
+    return [{key: row[key] for key in ("report_id", "kind", "title", "subject", "created_at", "created_by", "bytes")} for row in rows]
 
 
-def report_path(report_id: str):
-    """Path of a generated report; NotFoundError if the id is malformed or the file is gone."""
+def _row(report_id: str):
     if not _ID_PATTERN.fullmatch(report_id):
         raise NotFoundError(f"Unknown report: {report_id}")
-    path = _reports_dir() / f"{report_id}.pdf"
-    if not path.is_file():
+    with db.transaction() as connection:
+        row = connection.execute(select(db.reports).where(db.reports.c.report_id == report_id)).mappings().first()
+    if row is None:
         raise NotFoundError(f"Unknown report: {report_id}")
-    return path
+    return row
+
+
+def report_pdf(report_id: str) -> bytes:
+    """A generated report's PDF; NotFoundError if the id is malformed or unknown."""
+    return get_blobstore().get(_row(report_id)["blob_key"])
+
+
+def delete_report(report_id: str) -> None:
+    row = _row(report_id)
+    get_blobstore().delete(row["blob_key"])
+    with db.transaction() as connection:
+        connection.execute(delete(db.reports).where(db.reports.c.report_id == report_id))
+
+
+def purge_expired_reports() -> int:
+    """Delete reports older than RETENTION_DAYS (0 keeps them)."""
+    days = retention_days()
+    if not days:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    with db.transaction() as connection:
+        expired = connection.execute(select(db.reports.c.report_id, db.reports.c.blob_key)
+                                     .where(db.reports.c.created_at < cutoff)).all()
+    for report_id, blob_key in expired:
+        get_blobstore().delete(blob_key)
+        with db.transaction() as connection:
+            connection.execute(delete(db.reports).where(db.reports.c.report_id == report_id))
+    return len(expired)
