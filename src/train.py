@@ -2,7 +2,7 @@
 SGCC Theft Detector - Training Pipeline
 
     python -m src.train                  # full run (Optuna trials from config.yaml)
-    python -m src.train --quick          # smoke run on a sample with a few trials
+    python -m src.train --quick          # smoke run on a sample with a few trials, written to artifacts/quick/
     python -m src.train --device cuda    # XGBoost on an NVIDIA GPU (the rest stays on the CPU)
 
 Follows the proposal's protocol:
@@ -13,10 +13,15 @@ Follows the proposal's protocol:
 4. Measure what SMOTE+ENN does to the training data (Objective 1, section 3.9).
 5. Tune the two XGBoost pipelines with Optuna, resampling inside every CV fold (section 3.10).
 6. Fit every candidate in ``src.experiment``; tuned XGBoost stops early on validation.
-   Each candidate's decision threshold maximises F1 on validation.
+   Each candidate is Platt-calibrated on validation (``src.calibration``), and its decision
+   threshold maximises F1 on the calibrated validation probabilities.
 7. Serve the XGBoost pipeline with the higher validation PR-AUC.
-8. Score the test customers once: effectiveness and computational cost (section 3.11).
-9. Write the model, its pipeline spec, all results, and the demo population the API serves.
+8. Score the test customers once: effectiveness, calibration and computational cost (section 3.11).
+   Every candidate's validation and test predictions are saved, so the significance tests
+   (scripts/significance.py) and the research API never refit or rescore anything.
+9. Publish (``src.publish``): the model, its frozen pipeline spec (feature settings, feature
+   list, calibration, threshold, code and data fingerprints), all results, and an unlabelled
+   operational population, followed by a manifest of their SHA-256 hashes.
 """
 
 import argparse
@@ -27,20 +32,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import numpy as np
 import pandas as pd
 import yaml
 from sklearn.metrics import average_precision_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+from .calibration import apply_platt, calibration_metrics, fit_isotonic, fit_platt, reliability
 from .data_loader import load_wide
-from .eval import (
-    classification_metrics, feature_importance, inference_ms_per_customer, model_size_mb, save_json,
-)
+from .eval import classification_metrics, feature_importance, inference_ms_per_customer, model_size_mb
 from .experiment import CANDIDATES, SERVABLE, fit_candidate
 from .features import build_features_wide
 from .modeling import save_model, select_threshold, tune_xgb
 from .preprocessing import clean_series
+from .publish import Publisher, git_revision, library_versions, sha256
 from .resampling import Treatment, diagnostics
 
 logger = logging.getLogger(__name__)
@@ -61,16 +67,37 @@ def _resolve(path: str) -> Path:
     return p if p.is_absolute() else BASE_DIR / p
 
 
-def write_demo_dataset(wide: pd.DataFrame, labels: pd.Series, path: Path) -> None:
-    """Write customers in the SGCC layout (CONS_NO, FLAG, one column per date)."""
+def write_population(wide: pd.DataFrame, path: Path) -> None:
+    """Write customers in the SGCC layout without labels (CONS_NO, one column per date)."""
     frame = wide.copy()
     if isinstance(frame.columns, pd.DatetimeIndex):
         frame.columns = frame.columns.strftime("%Y-%m-%d")
-    frame.insert(0, "FLAG", labels.reindex(frame.index).astype(int).values)
     frame.insert(0, "CONS_NO", frame.index.astype(str))
-    path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(path, index=False, float_format="%.6g", compression={"method": "gzip", "mtime": 0})
-    logger.info("Wrote %d demo customers to %s (%.1f MB)", len(frame), path, path.stat().st_size / 1e6)
+    logger.info("Wrote %d unlabelled customers to %s (%.1f MB)", len(frame), path, path.stat().st_size / 1e6)
+
+
+def write_predictions(ids, y: pd.Series, raw: Dict[str, np.ndarray], calibrated: Dict[str, np.ndarray], path: Path) -> None:
+    """One row per customer: label, then each pipeline's raw score and calibrated probability."""
+    frame = pd.DataFrame({"customer_id": list(map(str, ids)), "label": y.loc[ids].astype(int).to_numpy()})
+    for name in raw:
+        frame[f"{name}_raw"] = raw[name]
+        frame[name] = calibrated[name]
+    frame.to_csv(path, index=False, float_format="%.8g", compression={"method": "gzip", "mtime": 0})
+
+
+def calibration_report(y_val, y_test, raw_val, raw_test, platt: Dict[str, float]) -> Dict[str, Any]:
+    """Brier, log-loss and ECE before and after Platt scaling (served) and isotonic regression (compared)."""
+    iso = fit_isotonic(raw_val, y_val)
+    report: Dict[str, Any] = {"platt": platt}
+    for split, y, raw in (("validation", y_val, raw_val), ("test", y_test, raw_test)):
+        report[split] = {
+            "raw": calibration_metrics(y, raw),
+            "platt": calibration_metrics(y, apply_platt(raw, platt)),
+            "isotonic": calibration_metrics(y, iso.predict(raw)),
+        }
+    report["reliability_test"] = {"raw": reliability(y_test, raw_test), "platt": reliability(y_test, apply_platt(raw_test, platt))}
+    return report
 
 
 def split_customers(y: pd.Series, validation_size: float, test_size: float, random_state: int):
@@ -101,7 +128,6 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
     random_state = int(config["random_state"])
     data_cfg, model_cfg, eval_cfg = config["data"], config["model"], config["evaluation"]
     resampling_cfg = config.get("resampling", {})
-    paths = {key: _resolve(value) for key, value in config["paths"].items()}
     stages = []
     clock = [time.perf_counter()]
 
@@ -163,11 +189,13 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
             treatment=spec["treatment"], treatment_config=resampling_cfg, initial_params=initial, device=device,
         )
         tuned[name] = {"params": params, "cv_best_score": float(study.best_value),
+                       "fold_scores": study.best_trial.user_attrs["fold_scores"],
                        "trials": [float(t.value) for t in study.trials if t.value is not None]}
     mark("Tune")
 
-    # 6. Fit every candidate; thresholds from validation
+    # 6. Fit every candidate; calibration and thresholds from validation
     fitted, validation = {}, {}
+    raw_val, cal_val = {}, {}
     for name, spec in CANDIDATES.items():
         X = X_by[spec["preprocessing"]]
         fitted[name] = fit_candidate(
@@ -175,10 +203,13 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
             X_val=X.loc[val_idx], y_val=y_val, resampling_config=resampling_cfg,
             early_stopping_rounds=int(eval_cfg["early_stopping_rounds"]), random_state=random_state, device=device,
         )
-        proba = fitted[name].predict(X.loc[val_idx])
+        raw_val[name] = fitted[name].predict(X.loc[val_idx])
+        platt = fit_platt(raw_val[name], y_val)
+        cal_val[name] = apply_platt(raw_val[name], platt)
         validation[name] = {
-            "pr_auc": float(average_precision_score(y_val, proba)),
-            "threshold": select_threshold(y_val, proba, strategy=eval_cfg.get("threshold_strategy", "f1"),
+            "pr_auc": float(average_precision_score(y_val, raw_val[name])),
+            "platt": platt,
+            "threshold": select_threshold(y_val, cal_val[name], strategy=eval_cfg.get("threshold_strategy", "f1"),
                                           min_precision=float(eval_cfg.get("min_precision", 0.5))),
         }
         logger.info("%s: validation PR-AUC %.4f", name, validation[name]["pr_auc"])
@@ -187,14 +218,17 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
     mark("Validate")
 
     # 7. Test set, once
-    comparison = {}
+    comparison, calibration = {}, {}
+    raw_test, cal_test = {}, {}
     for name, spec in CANDIDATES.items():
         X_test = fitted[name].treatment.transform(X_by[spec["preprocessing"]].loc[test_idx])
-        proba = fitted[name].model.predict_proba(X_test)[:, 1]
+        raw_test[name] = fitted[name].model.predict_proba(X_test)[:, 1]
+        cal_test[name] = apply_platt(raw_test[name], validation[name]["platt"])
+        calibration[name] = calibration_report(y_val, y_test, raw_val[name], raw_test[name], validation[name]["platt"])
         comparison[name] = {
             **spec,
-            **classification_metrics(y_test, proba, validation[name]["threshold"]),
-            "at_threshold_0_5": classification_metrics(y_test, proba, 0.5),
+            **classification_metrics(y_test, cal_test[name], validation[name]["threshold"]),
+            "at_threshold_0_5": classification_metrics(y_test, cal_test[name], 0.5),
             "validation_pr_auc": validation[name]["pr_auc"],
             "training_time": round(fitted[name].fit_seconds, 2),
             "inference_ms_per_customer": inference_ms_per_customer(fitted[name].model, X_test),
@@ -203,29 +237,55 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         }
     mark("Evaluate")
 
-    # 8. Publish
+    # 8. Publish: stage every file, move them into place, then write the manifest.
+    #    A quick run publishes under artifacts/quick/ and never replaces the served model.
+    root = _resolve(config["paths"]["artifacts"]) / "quick" if quick_mode else BASE_DIR
+    rel = {"model": config["paths"]["model_file"], "artifacts": config["paths"]["artifacts"],
+           "models": config["paths"]["models"], "population": data_cfg["serving_data_path"]}
+    out = Publisher(root)
     served = fitted[winner]
     spec = CANDIDATES[winner]
     X_served = X_by[spec["preprocessing"]]
-    save_model(served.model, str(paths["model_file"]))
-    save_json({
+    trained_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    save_model(served.model, str(out.path(rel["model"])))
+    out.json(f"{rel['artifacts']}/pipeline.json", {
         "name": winner,
+        "label": spec["label"],
+        "model_version": str(model_cfg.get("version", "unknown")),
+        "trained_at": trained_at,
         "preprocessing": spec["preprocessing"],
         "cleaning": config.get("preprocessing") if spec["preprocessing"] == "clean" else None,
+        "feature_config": feature_cfg,
+        "features": list(X_served.columns),
         "impute": None if served.treatment.medians_ is None else {k: float(v) for k, v in served.treatment.medians_.items()},
-    }, str(paths["artifacts"] / "pipeline.json"))
-    save_json(tuned[winner]["params"], str(paths["artifacts"] / "best_params.json"))
-    save_json(tuned, str(paths["artifacts"] / "tuning.json"))
-    save_json(comparison, str(paths["models"] / "baselines" / "comparison_results.json"))
-    save_json(resampling, str(paths["artifacts"] / "resampling.json"))
-    save_json(cleaning_log, str(paths["artifacts"] / "preprocessing_log.json"))
-    save_json({name: fitted[name].learning_curve for name in SERVABLE}, str(paths["artifacts"] / "learning_curves.json"))
-    feature_importance(served.model, X_served.columns).to_csv(paths["artifacts"] / "feature_importance.csv", index=False)
+        "calibration": {"method": "platt", **validation[winner]["platt"]},
+        "threshold": validation[winner]["threshold"],
+        "provenance": {
+            "code": git_revision(BASE_DIR),
+            "data_file": source.name,
+            "data_sha256": sha256(source),
+            "quick_mode": quick_mode,
+            "device": device,
+            "libraries": library_versions(),
+        },
+    })
+    out.json(f"{rel['artifacts']}/calibration.json", {
+        "method": "platt", "fitted_on": "validation", "served": winner, "pipelines": calibration})
+    out.json(f"{rel['artifacts']}/best_params.json", tuned[winner]["params"])
+    out.json(f"{rel['artifacts']}/tuning.json", tuned)
+    out.json(f"{rel['models']}/baselines/comparison_results.json", comparison)
+    out.json(f"{rel['artifacts']}/resampling.json", resampling)
+    out.json(f"{rel['artifacts']}/preprocessing_log.json", cleaning_log)
+    out.json(f"{rel['artifacts']}/learning_curves.json", {name: fitted[name].learning_curve for name in SERVABLE})
+    feature_importance(served.model, X_served.columns).to_csv(out.path(f"{rel['artifacts']}/feature_importance.csv"), index=False)
+    write_predictions(val_idx, y, raw_val, cal_val, out.path(f"{rel['artifacts']}/predictions/validation.csv.gz"))
+    write_predictions(test_idx, y, raw_test, cal_test, out.path(f"{rel['artifacts']}/predictions/test.csv.gz"))
 
-    demo_size = min(int(config["serving"]["demo_customers"]), len(test_idx))
-    demo_ids = train_test_split(test_idx, train_size=demo_size, stratify=y_test, random_state=random_state)[0] \
-        if demo_size < len(test_idx) else test_idx
-    write_demo_dataset(wide.loc[demo_ids], labels, _resolve(data_cfg["serving_data_path"]))
+    # The operational population: a sample of test customers, without their labels.
+    size = min(int(config["serving"]["population_customers"]), len(test_idx))
+    population = train_test_split(test_idx, train_size=size, stratify=y_test, random_state=random_state)[0] \
+        if size < len(test_idx) else test_idx
+    write_population(wide.loc[population], out.path(rel["population"]))
     mark("Publish")
 
     metrics = {
@@ -233,21 +293,27 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         "pipeline": winner,
         "pipeline_label": spec["label"],
         "model_version": str(model_cfg.get("version", "unknown")),
-        "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "trained_at": trained_at,
         "quick_mode": quick_mode,
         "device": device,
         "cv_best_score": tuned[winner]["cv_best_score"],
+        "cv_fold_scores": tuned[winner]["fold_scores"],
         "cv_metric": optuna_cfg.get("metric", "average_precision"),
         "n_trials": len(tuned[winner]["trials"]),
         "train_customers": int(len(train_idx)),
         "validation_customers": int(len(val_idx)),
         "test_customers": int(len(test_idx)),
+        "population_customers": int(len(population)),
         "n_features": int(X_served.shape[1]),
+        "calibration": {split: calibration[winner][split]["platt"] for split in ("validation", "test")},
         "stages": stages,
     }
-    save_json(metrics, str(paths["artifacts"] / "metrics.json"))
+    out.json(f"{rel['artifacts']}/metrics.json", metrics)
+    manifest = out.commit({"model_version": metrics["model_version"], "pipeline": winner, "quick_mode": quick_mode})
+    logger.info("Published %d files under %s", len(manifest["files"]), root)
     return {
         "served": winner,
+        "published_to": str(root),
         "validation_pr_auc": {name: round(v["pr_auc"], 4) for name, v in validation.items()},
         "test": {name: {k: round(c[k], 4) for k in ("auc", "pr_auc", "recall", "precision", "f1", "mcc")}
                  for name, c in comparison.items()},
@@ -258,7 +324,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train the SGCC theft detector")
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
     parser.add_argument("--data", default=None, help="Override data.training_data_path")
-    parser.add_argument("--quick", action="store_true", help="Sample customers and run few trials")
+    parser.add_argument("--quick", action="store_true", help="Sample customers, run few trials, publish to artifacts/quick/")
     parser.add_argument("--device", choices=("cpu", "cuda"), default=None,
                         help="Where XGBoost trains (default: model.device in config.yaml)")
     args = parser.parse_args()

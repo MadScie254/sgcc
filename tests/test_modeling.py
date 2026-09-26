@@ -7,7 +7,7 @@ from sklearn.datasets import make_classification
 
 from src.eval import classification_metrics, feature_importance
 from src.modeling import (
-    cross_val_proba, fit_with_early_stopping, get_xgb_model, load_model, make_folds, save_model, select_threshold, to_cpu,
+    cross_val_scores, fit_with_early_stopping, get_xgb_model, load_model, make_folds, save_model, select_threshold, to_cpu,
     tune_xgb,
 )
 
@@ -23,18 +23,19 @@ def data():
 SMALL_SPACE = {"n_estimators": {"low": 20, "high": 40, "step": 10}, "max_depth": {"low": 2, "high": 3}}
 
 
-def test_cross_val_proba_covers_every_row(data):
+def test_cross_val_scores_one_per_fold(data):
     X, y = data
-    oof = cross_val_proba({"n_estimators": 20}, make_folds(X, y, cv=3), len(y))
-    assert oof.shape == (len(y),)
-    assert ((oof >= 0) & (oof <= 1)).all()
-    assert classification_metrics(y, oof)["auc"] > 0.7
+    scores = cross_val_scores({"n_estimators": 20}, make_folds(X, y, cv=3), y)
+    assert scores.shape == (3,)
+    assert ((scores > 0.3) & (scores <= 1)).all()
 
 
 def test_tune_xgb_returns_params_in_search_space(data):
     X, y = data
     params, study = tune_xgb(X, y, n_trials=2, cv=3, search_space=SMALL_SPACE)
     assert len(study.trials) == 2
+    # The objective is the mean of the per-fold scores, which are kept on each trial.
+    assert study.best_value == pytest.approx(np.mean(study.best_trial.user_attrs["fold_scores"]), abs=1e-5)
     assert 20 <= params["n_estimators"] <= 40
     assert 2 <= params["max_depth"] <= 3
 

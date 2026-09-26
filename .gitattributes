@@ -3,3 +3,8 @@
 *.ubj binary
 *.gz binary
 *.pdf binary
+
+# Published model files are checked against artifacts/manifest.json by SHA-256,
+# so git must never rewrite their line endings (core.autocrlf on Windows would).
+artifacts/** -text
+models/** -text

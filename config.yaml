@@ -6,7 +6,8 @@ random_state: 42
 data:
   # Full SGCC dataset used for training (not committed; see scripts/download_data.py).
   training_data_path: "data/sgcc_full.csv"
-  # Held-out customers the API serves. Written by training, committed to the repo.
+  # The operational population the API scores: held-out test customers, written by training
+  # WITHOUT labels and committed. A supervisor can replace it with uploaded readings.
   serving_data_path: "data/sgcc_demo.csv.gz"
 
 # Series cleaning (proposal section 3.7), used by pipelines on cleaned readings.
@@ -72,7 +73,7 @@ evaluation:
   min_precision: 0.5
 
 serving:
-  demo_customers: 3000            # held-out customers written to serving_data_path
+  population_customers: 3000      # unlabelled test customers written to serving_data_path
 
 paths:
   models: "models"

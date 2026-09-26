@@ -1,7 +1,7 @@
 """
 SGCC Theft Detector - Modeling Module
 
-XGBoost classifier tuned with Optuna on cross-validated PR-AUC.
+XGBoost classifier tuned with Optuna on the mean per-fold PR-AUC.
 
 A data-level treatment (``src.resampling.Treatment``: none, SMOTE or SMOTE+ENN)
 is fitted inside every cross-validation fold on that fold's training rows only,
@@ -85,15 +85,20 @@ def make_folds(X: pd.DataFrame, y: pd.Series, cv: int = 5, random_state: int = 4
     return folds
 
 
-def cross_val_proba(params: Dict[str, Any], folds: List[Fold], n_rows: int, random_state: int = 42,
-                    device: str = "cpu") -> np.ndarray:
-    """Out-of-fold positive-class probabilities for every row covered by ``folds``."""
-    oof = np.zeros(n_rows, dtype=float)
+def cross_val_scores(params: Dict[str, Any], folds: List[Fold], y, scorer=average_precision_score,
+                     random_state: int = 42, device: str = "cpu") -> np.ndarray:
+    """
+    ``scorer`` on each fold's validation rows, one value per fold. The folds are scored separately
+    and averaged by the caller: pooling out-of-fold probabilities from separately fitted models
+    mixes their score scales, so a pooled PR-AUC does not measure any one model.
+    """
+    y = np.asarray(y).astype(int)
+    scores = []
     for X_tr, y_tr, X_val, val_idx in folds:
         model = get_xgb_model(params, random_state=random_state, device=device)
         model.fit(X_tr, y_tr)
-        oof[val_idx] = model.predict_proba(X_val)[:, 1]
-    return oof
+        scores.append(float(scorer(y[val_idx], model.predict_proba(X_val)[:, 1])))
+    return np.asarray(scores)
 
 
 def _suggest(trial: optuna.Trial, name: str, spec: Dict[str, Any]):
@@ -117,7 +122,7 @@ def tune_xgb(
     device: str = "cpu",
 ) -> Tuple[Dict[str, Any], optuna.Study]:
     """
-    Tune XGBoost hyperparameters with Optuna (TPE) on cross-validated ``metric``,
+    Tune XGBoost hyperparameters with Optuna (TPE) on the mean of per-fold ``metric``,
     with ``treatment`` applied inside every fold.
 
     Returns:
@@ -134,8 +139,9 @@ def tune_xgb(
 
     def objective(trial: optuna.Trial) -> float:
         params = {name: _suggest(trial, name, spec) for name, spec in space.items()}
-        oof = cross_val_proba(params, folds, len(y), random_state=random_state, device=device)
-        return float(scorer(y, oof))
+        scores = cross_val_scores(params, folds, y, scorer, random_state=random_state, device=device)
+        trial.set_user_attr("fold_scores", [round(float(v), 6) for v in scores])
+        return float(scores.mean())
 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=random_state))
     if initial_params:

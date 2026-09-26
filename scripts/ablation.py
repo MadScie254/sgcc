@@ -1,13 +1,16 @@
 """
 Ablation study: what each part of the pipeline is worth (the proposal's variables).
 
-    python scripts/ablation.py                # after python -m src.train; ~25 min on 4 cores
+    python scripts/ablation.py                # after python -m src.train; ~20 min on 4 cores
     python scripts/ablation.py --device cuda  # XGBoost fits on an NVIDIA GPU
     python scripts/ablation.py --plot-only    # redraw the figure from artifacts/ablation.json
 
-5-fold stratified cross-validation on all 42,372 customers. Each variant changes
-one thing relative to its neighbour, with the hyperparameters training tuned
-(artifacts/tuning.json, trees from early stopping) held fixed:
+5-fold stratified cross-validation on the development customers (training plus
+validation, 36,016): the test customers stay untouched, as in training. Each
+fold is scored separately and the table reports the mean and standard deviation
+over the five folds. Each variant changes one thing relative to its neighbour,
+with the hyperparameters training tuned (artifacts/tuning.json, trees from early
+stopping) held fixed:
 
   A. raw readings, the proposal's 25 core features, no resampling
   B. raw readings, all features, no resampling (standard XGBoost)
@@ -40,9 +43,9 @@ from sklearn.metrics import average_precision_score, roc_auc_score  # noqa: E402
 
 from src.data_loader import load_wide  # noqa: E402
 from src.feature_catalog import CORE_FEATURES  # noqa: E402
-from src.modeling import cross_val_proba, make_folds  # noqa: E402
+from src.modeling import cross_val_scores, make_folds  # noqa: E402
 from src.pipeline import features_for  # noqa: E402
-from src.train import load_config  # noqa: E402
+from src.train import load_config, split_customers  # noqa: E402
 
 BLUE, ORANGE, INK2, GRID = "#2a78d6", "#eb6834", "#52514e", "#e6e5e1"
 
@@ -64,6 +67,10 @@ def main() -> None:
 
     wide, labels = load_wide(str(ROOT / config["data"]["training_data_path"]))
     y = labels.reindex(wide.index).astype(int)
+    evaluation = config["evaluation"]
+    _, _, test_idx = split_customers(y, float(evaluation["validation_size"]), float(evaluation["test_size"]),
+                                     int(config["random_state"]))
+    wide, y = wide.drop(index=test_idx), y.drop(index=test_idx)
     raw = features_for(wide, "raw", feature_config=config.get("features"))
     clean = features_for(wide, "clean", config.get("preprocessing"), config.get("features"))
     resampling = config.get("resampling")
@@ -80,11 +87,16 @@ def main() -> None:
     results = {}
     for name, (X, treatment, p) in variants.items():
         folds = make_folds(X, y, cv=5, random_state=42, treatment=treatment, treatment_config=resampling)
-        oof = cross_val_proba(p, folds, len(y), device=args.device)
-        results[name] = {"roc_auc": float(roc_auc_score(y, oof)), "pr_auc": float(average_precision_score(y, oof)),
-                         "features": int(X.shape[1]), "treatment": treatment}
-        print(name, results[name], flush=True)
-    out.write_text(json.dumps({"base_rate": float(y.mean()), "variants": results}, indent=2))
+        scores = {"roc_auc": cross_val_scores(p, folds, y, roc_auc_score, device=args.device),
+                  "pr_auc": cross_val_scores(p, folds, y, average_precision_score, device=args.device)}
+        results[name] = {
+            **{key: float(v.mean()) for key, v in scores.items()},
+            **{f"{key}_sd": float(v.std(ddof=1)) for key, v in scores.items()},
+            "folds": {key: [round(float(x), 6) for x in v] for key, v in scores.items()},
+            "features": int(X.shape[1]), "treatment": treatment,
+        }
+        print(name, {k: round(results[name][k], 4) for k in ("roc_auc", "roc_auc_sd", "pr_auc", "pr_auc_sd")}, flush=True)
+    out.write_text(json.dumps({"customers": int(len(y)), "base_rate": float(y.mean()), "variants": results}, indent=2))
     plot(json.loads(out.read_text()))
 
 
@@ -95,13 +107,16 @@ def plot(data: dict) -> None:
     x = np.arange(len(names))
     for offset, key, color, label in ((-0.2, "roc_auc", BLUE, "ROC-AUC"), (0.2, "pr_auc", ORANGE, "PR-AUC")):
         vals = [results[n][key] for n in names]
-        ax.bar(x + offset, vals, width=0.38, color=color, label=label)
-        for xi, v in zip(x + offset, vals):
-            ax.text(xi, v + 0.012, f"{v:.3f}", ha="center", fontsize=7.5, color=INK2)
+        sds = [results[n][f"{key}_sd"] for n in names]
+        ax.bar(x + offset, vals, width=0.38, color=color, label=f"{label} (mean ± SD over 5 folds)",
+               yerr=sds, capsize=2.5, error_kw={"elinewidth": 0.9, "ecolor": INK2})
+        for xi, v, sd in zip(x + offset, vals, sds):
+            ax.text(xi, v + sd + 0.012, f"{v:.3f}", ha="center", fontsize=7.5, color=INK2)
     ax.axhline(base_rate, color="#b9b8b2", lw=1, ls="--", label=f"PR-AUC of random guessing ({base_rate:.3f})")
-    ax.set(xticks=x, ylim=(0, 1.08), ylabel="5-fold cross-validated score")
+    ax.set(xticks=x, ylim=(0, 1.1), ylabel="Score per fold, mean ± SD")
     ax.set_xticklabels([textwrap.fill(n, 16) for n in names], fontsize=7.5)
-    ax.set_title("Ablation: features, cleaning, resampling and tuning (42,372 customers)", fontweight="bold", fontsize=11, pad=14)
+    ax.set_title(f"Ablation: features, cleaning, resampling and tuning ({data['customers']:,} development customers)",
+                 fontweight="bold", fontsize=11, pad=14)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="y", color=GRID)
     ax.set_axisbelow(True)

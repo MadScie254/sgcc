@@ -4,11 +4,8 @@ SGCC Theft Detector - Evaluation Module
 Hold-out metrics, the proposal's baseline classifiers, and computational cost.
 """
 
-import json
-import logging
 import pickle
 import time
-from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -21,8 +18,6 @@ from sklearn.metrics import (
 )
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-
-logger = logging.getLogger(__name__)
 
 
 def classification_metrics(y_true, proba, threshold: float = 0.5) -> Dict:
@@ -84,9 +79,3 @@ def inference_ms_per_customer(model, X: pd.DataFrame, repeats: int = 3) -> float
         best = min(best, time.perf_counter() - start)
     return best / max(len(X), 1) * 1000
 
-
-def save_json(payload: Dict, output_path: str) -> None:
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-    logger.info("Saved %s", output_path)

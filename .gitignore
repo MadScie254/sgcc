@@ -41,16 +41,19 @@ ENV/
 
 # Model artifacts (only the served model and baseline summary are committed)
 models/**
-!models/.gitkeep
 !models/xgb_best.ubj
 !models/baselines/
 !models/baselines/comparison_results.json
 
 # Generated artifacts: the files the API reads and the thesis evidence are committed;
-# runtime state (artifacts/state) is not.
+# runtime state (artifacts/state) and quick runs (artifacts/quick) are not.
 artifacts/**
-!artifacts/.gitkeep
+!artifacts/manifest.json
 !artifacts/pipeline.json
+!artifacts/calibration.json
+!artifacts/predictions/
+!artifacts/predictions/validation.csv.gz
+!artifacts/predictions/test.csv.gz
 !artifacts/metrics.json
 !artifacts/feature_importance.csv
 !artifacts/best_params.json
@@ -63,7 +66,7 @@ artifacts/**
 !artifacts/data_quality.json
 
 # Data: the full dataset is downloaded (scripts/download_data.py); only the
-# held-out demo sample the API serves is committed.
+# unlabelled operational population the API scores is committed.
 data/**
 !data/sgcc_demo.csv.gz
 

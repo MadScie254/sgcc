@@ -39,11 +39,26 @@ def test_frame_to_wide_rejects_bad_input():
         frame_to_wide(bad)
 
 
-def test_frame_to_wide_drops_duplicate_customers():
+def test_frame_to_wide_rejects_duplicate_customers():
     frame = pd.concat([sgcc_frame(), sgcc_frame().iloc[[0]]], ignore_index=True)
-    wide, labels = frame_to_wide(frame)
-    assert list(wide.index) == ["A", "B", "C"]
-    assert len(labels) == 3
+    with pytest.raises(ValueError, match="more than once: A"):
+        frame_to_wide(frame)
+
+
+def test_frame_to_wide_accepts_iso_dates():
+    frame = sgcc_frame()
+    frame.columns = [c if c in ("CONS_NO", "FLAG") else pd.Timestamp(c).strftime("%Y-%m-%d") for c in frame.columns]
+    wide, _ = frame_to_wide(frame)
+    assert wide.columns[0] == pd.Timestamp("2014-01-01")
+    np.testing.assert_array_equal(wide.loc["A"].to_numpy(), np.arange(1, 121))
+
+
+def test_frame_to_wide_rejects_ambiguous_dates():
+    frame = sgcc_frame()
+    frame.columns = [c if c in ("CONS_NO", "FLAG") else pd.Timestamp(c).strftime("%m/%d/%Y") for c in frame.columns]
+    assert is_consumption_frame(frame)
+    with pytest.raises(ValueError, match="year first"):
+        frame_to_wide(frame)
 
 
 def test_is_consumption_frame():
