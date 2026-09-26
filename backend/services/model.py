@@ -384,7 +384,7 @@ def _lime_explainer(population_id: str):
     background = get_feature_matrix()[get_feature_names()]
     medians = background.median().fillna(0.0)
     # Decile bins: with LIME's default quartiles its surrogate leans on magnitude features and agrees
-    # with SHAP on fewer cases (8 vs 14 of the 30 highest-risk customers in the sample population).
+    # with SHAP on fewer of the highest-risk customers.
     explainer = LimeTabularExplainer(background.fillna(medians).to_numpy(), feature_names=get_feature_names(),
                                      class_names=["honest", "theft"], mode="classification", discretizer="decile",
                                      random_state=0)

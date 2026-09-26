@@ -62,7 +62,8 @@ export function ThresholdStudioPage() {
   const trained = metrics.data.trained_threshold;
   const isInService = Math.abs(p.threshold - inService) < 0.005;
   const hasValue = Boolean(costModel.cost_per_visit || costModel.value_per_theft);
-  const best = points.reduce((b, pt, i) => (pt.net_value > points[b].net_value ? i : b), 0);
+  // Among thresholds with the same net value (e.g. once the capacity is filled), the highest flags fewest customers.
+  const best = points.reduce((b, pt, i) => (pt.net_value >= points[b].net_value - 1e-9 ? i : b), 0);
   const presets: Array<[string, number]> = [["Wide net", 0.1], ["Trained", trained], ["More likely than not", 0.5]];
   if (hasValue) presets.push(["Best net value", points[best].threshold]);
 

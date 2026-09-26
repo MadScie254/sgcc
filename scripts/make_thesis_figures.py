@@ -306,11 +306,12 @@ def main() -> None:
                 row = sig["comparisons"][name][metric]
                 ax.errorbar(row["difference"], k, xerr=[[row["difference"] - row["ci_low"]], [row["ci_high"] - row["difference"]]],
                             fmt="o", color=COLORS[name], ecolor=COLORS[name], elinewidth=2, capsize=4, ms=7)
-                ax.text(row["ci_high"], k + 0.22, f"  p = {row['p_holm']:.3g}{' *' if row['significant'] else ''}", fontsize=7.5, color=INK2)
+                p_text = "p < 0.001" if row["p_holm"] < 0.001 else f"p = {row['p_holm']:.3f}"
+                ax.text(row["difference"], k - 0.22, p_text + (" *" if row["significant"] else ""), ha="center", fontsize=7.5, color=INK2)
             ax.axvline(0, color=INK, lw=1, ls="--")
             ax.set(title=f"{name_}: proposed minus other", xlabel="Difference (95% bootstrap interval)")
             ax.grid(axis="y", visible=False)
-        axes[0].set(yticks=np.arange(len(others)), ylim=(-0.6, len(others) - 0.3))
+        axes[0].set(yticks=np.arange(len(others)), ylim=(-0.7, len(others) - 0.4))
         axes[0].set_yticklabels([wrap(label[n], 22) for n in others], fontsize=8)
         axes[0].invert_yaxis()
         fig.suptitle(f"Paired stratified bootstrap on the {sig['population']['customers']:,} test customers "

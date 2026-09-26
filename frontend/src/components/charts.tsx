@@ -303,7 +303,8 @@ export function NetValueChart({ points, index }: { points: Array<{ threshold: nu
   const span = hi - lo || 1;
   const x = (i: number) => L + (i / (points.length - 1)) * (R - L);
   const y = (v: number) => B - ((v - lo) / span) * (B - T);
-  const best = values.indexOf(Math.max(...values));
+  const top = Math.max(...values);
+  const best = values.reduce((b, v, i) => (v >= top - 1e-9 ? i : b), 0);
   const money = (v: number) => (Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : Math.abs(v) >= 1e3 ? `${(v / 1e3).toFixed(0)}k` : v.toFixed(0));
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Expected net value by threshold; highest at τ ${points[best].threshold.toFixed(2)}`}>
