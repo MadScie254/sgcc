@@ -140,6 +140,9 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
     source = _resolve(data_path or data_cfg["training_data_path"])
     if not source.exists():
         raise FileNotFoundError(f"Training data not found: {source}. Run: python scripts/download_data.py")
+    # Fingerprints taken before anything else, so edits made while training runs do not leak in.
+    provenance = {"code": git_revision(BASE_DIR), "data_file": source.name, "data_sha256": sha256(source),
+                  "quick_mode": quick_mode, "device": device, "libraries": library_versions()}
     wide, labels = load_wide(str(source))
     if quick_mode:
         fraction = float(model_cfg["quick_train"]["sample_fraction"])
@@ -260,14 +263,7 @@ def train_pipeline(config_path: str = "config.yaml", quick_mode: bool = False,
         "impute": None if served.treatment.medians_ is None else {k: float(v) for k, v in served.treatment.medians_.items()},
         "calibration": {"method": "platt", **validation[winner]["platt"]},
         "threshold": validation[winner]["threshold"],
-        "provenance": {
-            "code": git_revision(BASE_DIR),
-            "data_file": source.name,
-            "data_sha256": sha256(source),
-            "quick_mode": quick_mode,
-            "device": device,
-            "libraries": library_versions(),
-        },
+        "provenance": provenance,
     })
     out.json(f"{rel['artifacts']}/calibration.json", {
         "method": "platt", "fitted_on": "validation", "served": winner, "pipelines": calibration})
