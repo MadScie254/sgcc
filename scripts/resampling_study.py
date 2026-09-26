@@ -145,27 +145,24 @@ def plot(data: dict) -> None:
     sds = np.array([variants[k]["pr_auc_sd"] for k in labels])
     reference = variants["No resampling"]["pr_auc"]
     colors = [ORANGE if variants[k]["treatment"] == "none" else
-              BLUE if "proposed" in k else VIOLET if variants[k]["treatment"] == "smote_enn" else "#9a98cf"
+              BLUE if "proposed" in k else VIOLET if variants[k]["treatment"] == "smote_enn" else "#8a88c4"
               for k in labels]
-    fig, ax = plt.subplots(figsize=(9, 5.6))
+    fig, ax = plt.subplots(figsize=(8.6, 5.4))
     y = np.arange(len(labels))[::-1]
-    ax.barh(y, means, xerr=sds, color=colors, height=0.62, error_kw={"elinewidth": 0.9, "ecolor": INK2, "capsize": 2.5})
-    ax.axvline(reference, color=ORANGE, lw=1.2, ls="--")
-    for yi, m, s in zip(y, means, sds):
-        ax.text(m + s + 0.004, yi, f"{m:.3f}", va="center", fontsize=8, color=INK2)
+    ax.axvline(reference, color=ORANGE, lw=1, ls="--", zorder=1)
+    for yi, m, s, c in zip(y, means, sds, colors):
+        ax.errorbar(m, yi, xerr=s, fmt="o", color=c, ecolor=c, elinewidth=1.4, capsize=3, markersize=6, zorder=3)
+        # Values in a column to the right of the plot, clear of the marks.
+        ax.text(1.02, yi, f"{m:.3f} ± {s:.3f}", transform=ax.get_yaxis_transform(), va="center", fontsize=8, color=INK2)
+    ax.text(1.02, len(labels) - 0.2, "PR-AUC", transform=ax.get_yaxis_transform(), fontsize=8, color=INK2,
+            fontweight="bold", va="bottom")
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=8.5)
-    lo = max(0.0, float((means - sds).min()) - 0.04)
-    ax.set_xlim(lo, float((means + sds).max()) + 0.05)
-    ax.set_xlabel("PR-AUC, mean ± SD over 5 folds of the development customers")
+    ax.set_ylim(-0.7, len(labels) - 0.3)
+    ax.set_xlim(float((means - sds).min()) - 0.01, float((means + sds).max()) + 0.01)
+    ax.set_xlabel("PR-AUC, mean ± SD over 5 folds of the development customers (dashed: no resampling)")
     ax.grid(axis="y", visible=False)
-    ax.set_title("Resampling choices against no resampling (raw readings, fixed hyperparameters)", pad=10)
-    ax.text(reference, len(labels) - 0.35, " no resampling", color=ORANGE, fontsize=8, va="bottom")
-    fair = data.get("fair_test")
-    if fair:
-        m = fair["result"]["metrics"]
-        ax.text(0.99, 0.02, f"Tuned SMOTE+ENN on raw readings, test set: PR-AUC {m['pr_auc']:.3f}",
-                transform=ax.transAxes, ha="right", fontsize=8, color=INK2)
+    ax.set_title("Resampling choices against no resampling\n(raw readings, fixed hyperparameters)", pad=10)
     figstyle.save(fig, "fig-5-21-resampling-sensitivity")
 
 

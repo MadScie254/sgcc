@@ -1227,5 +1227,412 @@
         }
       }
     }
+  },
+  "grid": {
+    "customers": 36016,
+    "base_rate": 0.08532318969346957,
+    "folds": 5,
+    "hyperparameters": "standard XGBoost's tuned values and trees; scale_pos_weight = 1 when resampled",
+    "variants": {
+      "No resampling": {
+        "treatment": "none",
+        "config": {},
+        "roc_auc": 0.853684593042267,
+        "pr_auc": 0.5066123112695852,
+        "roc_auc_sd": 0.005178061460119847,
+        "pr_auc_sd": 0.01072402416415143,
+        "folds": {
+          "roc_auc": [
+            0.854583,
+            0.858639,
+            0.845471,
+            0.852451,
+            0.857278
+          ],
+          "pr_auc": [
+            0.51208,
+            0.505151,
+            0.491416,
+            0.520407,
+            0.504007
+          ]
+        },
+        "training_rows": 28812,
+        "training_theft_share": 0.0853,
+        "seconds": 45.6
+      },
+      "SMOTE 0.2": {
+        "treatment": "smote",
+        "config": {
+          "sampling_strategy": 0.2,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8488976758303884,
+        "pr_auc": 0.4958840983985411,
+        "roc_auc_sd": 0.00571307153040305,
+        "pr_auc_sd": 0.012919880053360559,
+        "folds": {
+          "roc_auc": [
+            0.851867,
+            0.849477,
+            0.840197,
+            0.847447,
+            0.8555
+          ],
+          "pr_auc": [
+            0.497664,
+            0.481516,
+            0.483645,
+            0.508088,
+            0.508507
+          ]
+        },
+        "training_rows": 31624,
+        "training_theft_share": 0.1667,
+        "seconds": 31.7
+      },
+      "SMOTE 0.35": {
+        "treatment": "smote",
+        "config": {
+          "sampling_strategy": 0.35,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.842887978404864,
+        "pr_auc": 0.4841054429470775,
+        "roc_auc_sd": 0.005866071409811458,
+        "pr_auc_sd": 0.01628113860189722,
+        "folds": {
+          "roc_auc": [
+            0.844534,
+            0.842317,
+            0.833189,
+            0.845907,
+            0.848493
+          ],
+          "pr_auc": [
+            0.476321,
+            0.469178,
+            0.471786,
+            0.499225,
+            0.504017
+          ]
+        },
+        "training_rows": 35577,
+        "training_theft_share": 0.2592,
+        "seconds": 34.2
+      },
+      "SMOTE 0.5": {
+        "treatment": "smote",
+        "config": {
+          "sampling_strategy": 0.5,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8373510391189795,
+        "pr_auc": 0.4653850031004831,
+        "roc_auc_sd": 0.007410642860156642,
+        "pr_auc_sd": 0.02866930434600649,
+        "folds": {
+          "roc_auc": [
+            0.835672,
+            0.833589,
+            0.828003,
+            0.843022,
+            0.84647
+          ],
+          "pr_auc": [
+            0.433621,
+            0.439196,
+            0.466976,
+            0.494561,
+            0.492572
+          ]
+        },
+        "training_rows": 39531,
+        "training_theft_share": 0.3333,
+        "seconds": 37.4
+      },
+      "SMOTE 1.0": {
+        "treatment": "smote",
+        "config": {
+          "sampling_strategy": 1.0,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8296245624485952,
+        "pr_auc": 0.44476410103888997,
+        "roc_auc_sd": 0.007165523592876005,
+        "pr_auc_sd": 0.030780430385045538,
+        "folds": {
+          "roc_auc": [
+            0.828198,
+            0.826332,
+            0.820394,
+            0.834363,
+            0.838836
+          ],
+          "pr_auc": [
+            0.411512,
+            0.415449,
+            0.447007,
+            0.474844,
+            0.475009
+          ]
+        },
+        "training_rows": 52708,
+        "training_theft_share": 0.5,
+        "seconds": 44.7
+      },
+      "SMOTE+ENN 0.2": {
+        "treatment": "smote_enn",
+        "config": {
+          "sampling_strategy": 0.2,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8337666003314694,
+        "pr_auc": 0.45308300034106896,
+        "roc_auc_sd": 0.005794041395268349,
+        "pr_auc_sd": 0.013417677559128233,
+        "folds": {
+          "roc_auc": [
+            0.833916,
+            0.834319,
+            0.828514,
+            0.829113,
+            0.84297
+          ],
+          "pr_auc": [
+            0.444913,
+            0.436675,
+            0.457769,
+            0.453963,
+            0.472094
+          ]
+        },
+        "training_rows": 27947,
+        "training_theft_share": 0.1513,
+        "seconds": 35.0
+      },
+      "SMOTE+ENN 0.5 (proposed setting)": {
+        "treatment": "smote_enn",
+        "config": {
+          "sampling_strategy": 0.5,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8332774024996524,
+        "pr_auc": 0.43228589676761475,
+        "roc_auc_sd": 0.005411386772848062,
+        "pr_auc_sd": 0.018643558673407078,
+        "folds": {
+          "roc_auc": [
+            0.831735,
+            0.830822,
+            0.826484,
+            0.837199,
+            0.840147
+          ],
+          "pr_auc": [
+            0.414045,
+            0.411223,
+            0.440156,
+            0.442621,
+            0.453385
+          ]
+        },
+        "training_rows": 34706,
+        "training_theft_share": 0.3754,
+        "seconds": 47.8
+      },
+      "SMOTE+ENN 1.0": {
+        "treatment": "smote_enn",
+        "config": {
+          "sampling_strategy": 1.0,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8282936960551215,
+        "pr_auc": 0.41065195404425847,
+        "roc_auc_sd": 0.006048784704825973,
+        "pr_auc_sd": 0.020653518433897403,
+        "folds": {
+          "roc_auc": [
+            0.828294,
+            0.825634,
+            0.819743,
+            0.83261,
+            0.835188
+          ],
+          "pr_auc": [
+            0.397485,
+            0.380662,
+            0.425094,
+            0.422492,
+            0.427527
+          ]
+        },
+        "training_rows": 46553,
+        "training_theft_share": 0.5647,
+        "seconds": 62.1
+      },
+      "SMOTE+ENN 0.5, ENN k = 5": {
+        "treatment": "smote_enn",
+        "config": {
+          "sampling_strategy": 0.5,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 5
+        },
+        "roc_auc": 0.83226668228588,
+        "pr_auc": 0.4307143071711355,
+        "roc_auc_sd": 0.006839268993578204,
+        "pr_auc_sd": 0.018120812210144204,
+        "folds": {
+          "roc_auc": [
+            0.833644,
+            0.829069,
+            0.822294,
+            0.83643,
+            0.839896
+          ],
+          "pr_auc": [
+            0.412848,
+            0.410533,
+            0.435889,
+            0.444001,
+            0.450301
+          ]
+        },
+        "training_rows": 34123,
+        "training_theft_share": 0.3784,
+        "seconds": 45.6
+      },
+      "SMOTE-Tomek 0.5": {
+        "treatment": "smote_tomek",
+        "config": {
+          "sampling_strategy": 0.5,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8382242092855023,
+        "pr_auc": 0.46778701845043835,
+        "roc_auc_sd": 0.008216611858954809,
+        "pr_auc_sd": 0.02356459206258923,
+        "folds": {
+          "roc_auc": [
+            0.839281,
+            0.835794,
+            0.826305,
+            0.840832,
+            0.848909
+          ],
+          "pr_auc": [
+            0.446393,
+            0.444194,
+            0.464547,
+            0.48781,
+            0.495991
+          ]
+        },
+        "training_rows": 39461,
+        "training_theft_share": 0.333,
+        "seconds": 48.5
+      },
+      "Borderline-SMOTE 0.5": {
+        "treatment": "borderline_smote",
+        "config": {
+          "sampling_strategy": 0.5,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8427193861331732,
+        "pr_auc": 0.4782502509644922,
+        "roc_auc_sd": 0.006603648394987503,
+        "pr_auc_sd": 0.018299845283077158,
+        "folds": {
+          "roc_auc": [
+            0.846628,
+            0.843717,
+            0.831291,
+            0.844208,
+            0.847753
+          ],
+          "pr_auc": [
+            0.461428,
+            0.465224,
+            0.468388,
+            0.497363,
+            0.498848
+          ]
+        },
+        "training_rows": 39531,
+        "training_theft_share": 0.3333,
+        "seconds": 37.1
+      },
+      "ADASYN 0.5": {
+        "treatment": "adasyn",
+        "config": {
+          "sampling_strategy": 0.5,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8375132163144281,
+        "pr_auc": 0.46177204892309714,
+        "roc_auc_sd": 0.008541716175191016,
+        "pr_auc_sd": 0.028794240368746157,
+        "folds": {
+          "roc_auc": [
+            0.836149,
+            0.839177,
+            0.824724,
+            0.83898,
+            0.848535
+          ],
+          "pr_auc": [
+            0.429301,
+            0.443858,
+            0.45219,
+            0.486694,
+            0.496818
+          ]
+        },
+        "training_rows": 39532,
+        "training_theft_share": 0.3334,
+        "seconds": 35.9
+      },
+      "Random undersampling 0.5": {
+        "treatment": "undersample",
+        "config": {
+          "sampling_strategy": 0.5,
+          "smote_k_neighbors": 5,
+          "enn_n_neighbors": 3
+        },
+        "roc_auc": 0.8449877370289958,
+        "pr_auc": 0.4739450471592711,
+        "roc_auc_sd": 0.006507889427157204,
+        "pr_auc_sd": 0.01191943690239014,
+        "folds": {
+          "roc_auc": [
+            0.849874,
+            0.846758,
+            0.833672,
+            0.845996,
+            0.848639
+          ],
+          "pr_auc": [
+            0.479376,
+            0.462504,
+            0.459703,
+            0.484155,
+            0.483986
+          ]
+        },
+        "training_rows": 7375,
+        "training_theft_share": 0.3333,
+        "seconds": 14.9
+      }
+    }
   }
 }
