@@ -64,6 +64,15 @@ artifacts/**
 !artifacts/significance.json
 !artifacts/ablation.json
 !artifacts/data_quality.json
+# Extension studies (scripts/resampling_study.py, robustness.py, literature_metrics.py,
+# history_length.py, deep_baseline.py)
+!artifacts/resampling_study.json
+!artifacts/robustness.json
+!artifacts/literature_metrics.json
+!artifacts/history_length.json
+!artifacts/deep_baseline.json
+!artifacts/predictions/extensions_validation.csv.gz
+!artifacts/predictions/extensions_test.csv.gz
 
 # Data: the full dataset is downloaded (scripts/download_data.py); only the
 # unlabelled operational population the API scores is committed.

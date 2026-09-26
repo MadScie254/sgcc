@@ -32,7 +32,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -97,9 +96,9 @@ def repeated_splits(study, device: str) -> dict:
 
 
 def missingness(study, device: str) -> dict:
-    development = study.y.index.difference(pd.Index(study.test_idx))
-    y = study.y.loc[development]
-    raw, clean = study.X_by["raw"].loc[development], study.X_by["clean"].loc[development]
+    # Development customers in file order, as scripts/ablation.py has them, so the folds are the same.
+    y = study.y.drop(index=study.test_idx)
+    raw, clean = study.X_by["raw"].loc[y.index], study.X_by["clean"].loc[y.index]
     missing = [c for c in MISSING_FEATURES if c in raw.columns]
     variants = {
         "All features (served model's inputs)": raw,

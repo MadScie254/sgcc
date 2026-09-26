@@ -43,7 +43,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score  # noqa: E402
 
 from src import figstyle  # noqa: E402
 from src.experiment import ALL_CANDIDATES  # noqa: E402
-from src.figstyle import INK2, MUTED, ORANGE, VIOLET, BLUE, plt  # noqa: E402
+from src.figstyle import BLUE, INK2, ORANGE, VIOLET, plt  # noqa: E402
 from src.modeling import cross_val_scores, make_folds, tune_xgb  # noqa: E402
 from src.stats import paired_comparison  # noqa: E402
 from src.study import fit_and_score, load_study, public, save_extension_predictions  # noqa: E402
@@ -109,8 +109,9 @@ def fair_test(study, device: str, trials: int) -> dict:
 
 
 def grid(study, device: str) -> dict:
-    development = study.y.index.difference(pd.Index(study.test_idx))
-    X, y = study.X_by["raw"].loc[development], study.y.loc[development]
+    # Development customers in file order, as scripts/ablation.py has them, so the folds are the same.
+    y = study.y.drop(index=study.test_idx)
+    X = study.X_by["raw"].loc[y.index]
     base = study.tuned_params("xgboost")
     base_config = study.config.get("resampling") or {}
     variants = {}
