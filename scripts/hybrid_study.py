@@ -32,7 +32,7 @@ from sklearn.metrics import average_precision_score  # noqa: E402
 from src import figstyle  # noqa: E402
 from src.calibration import apply_platt, fit_platt  # noqa: E402
 from src.eval import classification_metrics  # noqa: E402
-from src.figstyle import INK2, ORANGE, SLATE, plt  # noqa: E402
+from src.figstyle import ORANGE, SLATE, plt  # noqa: E402
 from src.modeling import select_threshold  # noqa: E402
 from src.study import fit_and_score, load_study  # noqa: E402
 
@@ -122,11 +122,10 @@ def plot(data: dict) -> None:
     ax.set_xticklabels([f"{s}\n(study)" if s == "42" else s for s in seeds])
     ax.set_xlabel("Random split (seed)")
     ax.set_ylabel("Test-set PR-AUC")
-    ax.legend(fontsize=8.5, loc="lower right")
-    ax.set_title("Hybrid ensemble against its two parts on six random splits", pad=10)
-    for s, xi in zip(seeds, x):
-        ax.annotate(f"w={data['per_seed'][s]['weight_cnn']:.2f}", (xi, data["per_seed"][s]["hybrid"]["pr_auc"]),
-                    textcoords="offset points", xytext=(0, 7), ha="center", fontsize=7, color=INK2)
+    ax.legend(fontsize=8.5, loc="upper center", bbox_to_anchor=(0.5, -0.3), ncol=3, frameon=False)
+    weights = sorted({data["per_seed"][s]["weight_cnn"] for s in seeds})
+    chosen = f"CNN weight {weights[0]:.2f} on every split" if len(weights) == 1 else "CNN weight chosen per split"
+    ax.set_title(f"Hybrid ensemble against its two parts on six random splits\n({chosen})", pad=10)
     figstyle.save(fig, "fig-5-26-hybrid-splits")
 
 
