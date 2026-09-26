@@ -4,7 +4,11 @@ import gzip
 import io
 import json
 import math
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -488,8 +492,23 @@ def test_report_delete_and_errors(client, monkeypatch):
     assert client.post("/api/reports", json={"kind": "other"}).status_code == 422
     assert client.get("/api/reports/..%2f..%2fetc%2fpasswd/pdf").status_code == 404
 
-    monkeypatch.setattr(reports_service.fpdf, "FPDF_VERSION", "1.7.2")
+    monkeypatch.setattr(reports_service, "_fpdf_version", lambda: "1.7.2")
     unavailable = client.post("/api/reports", json={"kind": "portfolio"})
     assert unavailable.status_code == 503
     assert "pip install -r requirements.lock" in unavailable.json()["detail"]
     assert client.get("/api/health").json()["reports"]["available"] is False
+
+
+def test_old_pdf_library_disables_reports_not_the_api(tmp_path):
+    """PyFPDF 1.x (the old package that shares fpdf2's import name) must not stop the API from starting."""
+    stub = tmp_path / "fpdf"
+    stub.mkdir()
+    (stub / "__init__.py").write_text('FPDF_VERSION = "1.7.2"\n\nclass FPDF:\n    pass\n')
+    code = ("import backend.main\n"
+            "from backend.services.reports import reports_status\n"
+            "status = reports_status()\n"
+            "assert status['available'] is False and status['fpdf_version'] == '1.7.2', status\n"
+            "assert 'pip install -r requirements.lock' in status['detail']\n")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(tmp_path), str(Path(__file__).resolve().parents[1])])}
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=300)
+    assert result.returncode == 0, result.stderr[-2000:]

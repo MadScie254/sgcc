@@ -4,8 +4,8 @@ Operations (no labels): the portfolio overview, an uploaded dataset's results, a
 customer's case file. Research: the test-set evaluation, calibration and the
 statistical comparison of the pipelines. The two are never mixed in one report.
 
-Built with fpdf2 core fonts only (no network, no font files). Text is limited to
-Latin-1, so a few typographic characters are replaced before rendering.
+The page layout (fpdf2) is in ``pdf_layout``, imported only when a report is built:
+an old or missing PDF library disables reports and /api/health says how to fix it.
 """
 
 from __future__ import annotations
@@ -13,11 +13,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence
-
-import fpdf
-from fpdf import FPDF, FontFace
-from fpdf.enums import TableCellFillMode, XPos, YPos
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import delete, insert, select
 
@@ -33,9 +29,6 @@ from .operations import get_case, list_cases
 MIN_FPDF_VERSION = (2, 7, 8)
 _ID_PATTERN = re.compile(r"(portfolio|dataset|case|research)-[0-9]{14}-[0-9a-f]{8}")
 
-INK, INK_2, LINE, NIGHT, COBALT = (20, 22, 27), (79, 85, 97), (228, 226, 220), (16, 19, 23), (35, 70, 200)
-_REPLACEMENTS = {"→": "->", "—": "-", "–": "-", "τ": "threshold ", "≈": "~", "’": "'", "“": '"', "”": '"', "…": "..."}
-
 
 class ReportsUnavailable(RuntimeError):
     """PDF reports cannot be produced in this environment; the message says how to fix it."""
@@ -45,9 +38,18 @@ def _version(text: str) -> tuple:
     return tuple(int(part) for part in re.findall(r"\d+", text)[:3])
 
 
+def _fpdf_version() -> str:
+    """Version of the installed PDF library: fpdf2, or the older PyFPDF that shares its name."""
+    try:
+        import fpdf
+    except ImportError:
+        return "not installed"
+    return str(getattr(fpdf, "FPDF_VERSION", "unknown"))
+
+
 def reports_status() -> Dict[str, Any]:
-    installed = getattr(fpdf, "FPDF_VERSION", "unknown")
-    ok = installed != "unknown" and _version(installed) >= MIN_FPDF_VERSION
+    installed = _fpdf_version()
+    ok = bool(_version(installed)) and _version(installed) >= MIN_FPDF_VERSION
     return {
         "available": ok,
         "fpdf_version": installed,
@@ -58,13 +60,6 @@ def reports_status() -> Dict[str, Any]:
     }
 
 
-def _text(value: Any) -> str:
-    text = str(value)
-    for old, new in _REPLACEMENTS.items():
-        text = text.replace(old, new)
-    return text.encode("latin-1", "replace").decode("latin-1")
-
-
 def _pct(value: Optional[float], digits: int = 1) -> str:
     return "-" if value is None else f"{value * 100:.{digits}f}%"
 
@@ -73,124 +68,16 @@ def _num(value: Optional[float], digits: int = 3) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
-class _Report(FPDF):
-    def __init__(self, title: str, subtitle: str, footer_note: str):
-        super().__init__(orientation="portrait", unit="mm", format="A4")
-        self.report_title, self.subtitle, self.footer_note = title, subtitle, footer_note
-        self.set_margins(16, 16, 16)
-        self.set_auto_page_break(auto=True, margin=18)
-        self.set_title(_text(title))
-        self.set_author("GridSentinel")
-        self.add_page()
-
-    def header(self) -> None:
-        if self.page_no() == 1:
-            self.set_fill_color(*NIGHT)
-            self.rect(0, 0, self.w, 34, style="F")
-            self.set_xy(16, 9)
-            self.set_text_color(243, 242, 238)
-            self.set_font("Helvetica", "B", 9)
-            self.cell(0, 5, "GRIDSENTINEL  ·  REVENUE PROTECTION", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            self.set_font("Helvetica", "B", 18)
-            self.cell(0, 9, _text(self.report_title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            self.set_font("Helvetica", "", 9)
-            self.set_text_color(201, 205, 212)
-            self.cell(0, 5, _text(self.subtitle), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            self.set_y(42)
-        else:
-            self.set_font("Helvetica", "", 8)
-            self.set_text_color(*INK_2)
-            self.cell(0, 5, _text(self.report_title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            self.ln(2)
-        self.set_text_color(*INK)
-
-    def footer(self) -> None:
-        self.set_y(-12)
-        self.set_font("Helvetica", "", 7.5)
-        self.set_text_color(*INK_2)
-        self.cell(0, 5, _text(self.footer_note), align="L")
-        self.cell(0, 5, f"Page {self.page_no()}/{{nb}}", align="R")
-
-    def heading(self, text: str) -> None:
-        if self.get_y() > self.h - 50:
-            self.add_page()
-        self.ln(3)
-        self.set_font("Helvetica", "B", 12)
-        self.set_text_color(*INK)
-        self.cell(0, 7, _text(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.set_draw_color(*LINE)
-        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
-        self.ln(2.5)
-
-    def paragraph(self, text: str) -> None:
-        self.set_font("Helvetica", "", 9.5)
-        self.set_text_color(*INK_2)
-        self.multi_cell(0, 5, _text(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.set_text_color(*INK)
-        self.ln(1)
-
-    def facts(self, pairs: Sequence[tuple], columns: int = 2) -> None:
-        """Label/value pairs laid out in ``columns`` column pairs."""
-        self.set_font("Helvetica", "", 9)
-        self.set_fill_color(255, 255, 255)
-        label_style, value_style = FontFace(color=INK_2), FontFace(emphasis="B", color=INK)
-        widths = [34, 55] * columns if columns == 2 else [24, 36] * columns
-        padded = list(pairs) + [("", "")] * (-len(pairs) % columns)
-        with self.table(first_row_as_headings=False, col_widths=widths, borders_layout="NONE",
-                        line_height=5.6, text_align="LEFT") as table:
-            for i in range(0, len(padded), columns):
-                row = table.row()
-                for label, value in padded[i:i + columns]:
-                    row.cell(_text(label), style=label_style)
-                    row.cell(_text(value), style=value_style)
-        self.ln(1)
-
-    def grid(self, headings: Sequence[str], rows: Sequence[Sequence[Any]], widths: Sequence[float],
-             align: Optional[Sequence[str]] = None) -> None:
-        self.set_font("Helvetica", "", 8.5)
-        self.set_fill_color(255, 255, 255)
-        with self.table(col_widths=widths, line_height=5.4, borders_layout="HORIZONTAL_LINES",
-                        cell_fill_color=(246, 245, 241), cell_fill_mode=TableCellFillMode.ROWS,
-                        headings_style=FontFace(emphasis="B", color=INK, fill_color=(236, 234, 228)),
-                        text_align=tuple(align) if align else "LEFT") as table:
-            for values in [headings, *rows]:
-                row = table.row()
-                for value in values:
-                    row.cell(_text(value))
-        self.ln(2)
-
-    def monthly_chart(self, months: List[tuple], height: float = 38) -> None:
-        """Bars of monthly mean kWh/day; months without readings are shaded."""
-        x0, width = self.l_margin, self.w - self.l_margin - self.r_margin
-        y0 = self.get_y() + 2
-        top = max((v for _, v in months if v is not None), default=1.0) or 1.0
-        step = width / max(len(months), 1)
-        self.set_draw_color(*LINE)
-        for i, (_, value) in enumerate(months):
-            x = x0 + i * step
-            if value is None:
-                self.set_fill_color(251, 231, 223)
-                self.rect(x, y0, step, height, style="F")
-            else:
-                h = height * value / top
-                self.set_fill_color(*COBALT)
-                self.rect(x + step * 0.15, y0 + height - h, step * 0.7, h, style="F")
-        self.line(x0, y0 + height, x0 + width, y0 + height)
-        self.set_font("Helvetica", "", 7.5)
-        self.set_text_color(*INK_2)
-        self.set_xy(x0, y0 + height + 1)
-        self.cell(width / 2, 4, _text(months[0][0] if months else ""), align="L")
-        self.cell(width / 2, 4, _text(months[-1][0] if months else ""), align="R")
-        self.set_xy(x0, y0 + height + 5)
-        self.cell(0, 4, _text(f"Monthly mean, kWh/day (axis top {top:.1f}); shaded months had no meter readings."),
-                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        self.set_text_color(*INK)
-        self.ln(2)
-
-
 # ---------------------------------------------------------------------------
 # Report content
 # ---------------------------------------------------------------------------
+
+def _document(title: str, subtitle: str, footer_note: str):
+    """A new report page; the PDF library is imported here, after reports_status() allowed it."""
+    from .pdf_layout import Report
+
+    return Report(title, subtitle, footer_note)
+
 
 RESPONSIBLE_USE = ("A flag is a reason to inspect, not evidence of theft. Conclusions rest on the field "
                    "investigation; a customer found honest is cleared and can appeal (proposal section 3.13).")
@@ -207,7 +94,7 @@ def _portfolio(generated: str) -> tuple:
     cases = list_cases(status=None, tier=None, search=None, page=1, page_size=30)
     preview = threshold_preview(metrics["threshold"])["validation"]
     population = metrics["population"]
-    pdf = _Report("Portfolio risk report", f"Generated {generated}  ·  {metrics['customers_monitored']:,} customers", _footer(metrics))
+    pdf = _document("Portfolio risk report", f"Generated {generated}  ·  {metrics['customers_monitored']:,} customers", _footer(metrics))
 
     pdf.heading("Summary")
     pdf.paragraph(
@@ -255,7 +142,7 @@ def _dataset(generated: str, dataset_id: str) -> tuple:
     threshold = get_decision_threshold()
     summary = summarize(load_dataset(dataset_id), threshold, top_n=20)
     metrics = get_model_metrics()
-    pdf = _Report("Dataset scoring report", f"Generated {generated}  ·  {item['filename']}", _footer(metrics))
+    pdf = _document("Dataset scoring report", f"Generated {generated}  ·  {item['filename']}", _footer(metrics))
 
     pdf.heading("Dataset")
     pdf.facts([
@@ -295,7 +182,7 @@ def _case(generated: str, customer_id: str) -> tuple:
     explanation = explain_customer(customer_id)
     series = get_customer_timeseries(customer_id)
     metrics = get_model_metrics()
-    pdf = _Report("Case file", f"Generated {generated}  ·  customer {customer_id}", _footer(metrics))
+    pdf = _document("Case file", f"Generated {generated}  ·  customer {customer_id}", _footer(metrics))
 
     points = series["points"]
     observed = [p for p in points if p["kwh"] is not None]
@@ -362,7 +249,7 @@ def _research(generated: str) -> tuple:
     evaluation = research.evaluation()
     population = evaluation["population"]
     m, cm = evaluation["metrics"], evaluation["confusion_matrix"]
-    pdf = _Report("Research evaluation", f"Generated {generated}  ·  {population['description']}",
+    pdf = _document("Research evaluation", f"Generated {generated}  ·  {population['description']}",
                   f"Research record  ·  model {evaluation['pipeline']} v{evaluation['model_version']}")
 
     pdf.heading("Population")
