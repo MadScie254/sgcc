@@ -22,6 +22,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "pyyaml>=6.0",
+    "python-dotenv>=1.0",
     "fpdf2>=2.7.8",
     # State: PostgreSQL (SQLite without DATABASE_URL) and S3-compatible object storage
     "sqlalchemy>=2.0",

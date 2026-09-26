@@ -40,7 +40,9 @@ export default defineConfig({
         { name: "e2e-analyst", role: "analyst", sha256: sha256(KEYS.analyst) },
       ]),
       SGCC_STATE_DIR: mkdtempSync(join(tmpdir(), "sgcc-e2e-")),
-      ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),
+      // Never the working database: TEST_DATABASE_URL, or SQLite in the temporary state folder.
+      DATABASE_URL: process.env.TEST_DATABASE_URL ?? "",
+      S3_BUCKET: "",
     },
   },
 });

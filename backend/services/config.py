@@ -6,8 +6,13 @@ from pathlib import Path
 from typing import Any, Dict
 
 import yaml
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parents[2]
+
+# Settings from a local .env (DATABASE_URL, API_KEYS, ...; see .env.example and
+# scripts/setup_database.py). Variables already set in the environment win.
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 @lru_cache(maxsize=1)

@@ -7,12 +7,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from dotenv import dotenv_values
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO_DATASET = REPO_ROOT / "data" / "sgcc_demo.csv.gz"
 
-# Keep everything the API writes (cases, runs, uploads, reports) out of the repo.
+# Keep everything the API writes (cases, runs, uploads, reports) out of the repo, and
+# out of the working database: tests use TEST_DATABASE_URL, or SQLite in a temporary
+# folder. The values are set before the backend loads .env, which never overrides them.
 os.environ.setdefault("SGCC_STATE_DIR", tempfile.mkdtemp(prefix="sgcc-state-"))
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or dotenv_values(REPO_ROOT / ".env").get("TEST_DATABASE_URL") or ""
+os.environ["ENV"] = "development"
+os.environ["API_KEYS"] = ""
+os.environ["S3_BUCKET"] = ""
 
 
 @pytest.fixture(scope="session")

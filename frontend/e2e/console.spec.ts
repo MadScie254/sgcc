@@ -28,6 +28,8 @@ test("operations show estimates, never labels", async ({ page }) => {
 test("investigation flow: analyst reviews and dispatches, supervisor records the outcome", async ({ page }) => {
   await signIn(page, KEYS.analyst, "e2e-analyst (analyst)");
   await page.goto("/cases");
+  // A case nobody has touched, so the suite can re-run on a database that keeps earlier runs.
+  await page.getByRole("tab", { name: /^New/ }).click();
   const first = page.locator("tbody tr").first();
   await expect(first).toBeVisible();
   const customer = (await first.locator("a").first().getAttribute("title")) as string;

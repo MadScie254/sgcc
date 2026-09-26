@@ -183,7 +183,9 @@ python-dateutil==2.9.0.post0 ; python_full_version < '3.14'
     #   matplotlib
     #   pandas
 python-dotenv==1.2.3 ; python_full_version < '3.14'
-    # via uvicorn
+    # via
+    #   sgcc-theft-detector (pyproject.toml)
+    #   uvicorn
 python-multipart==0.0.32 ; python_full_version < '3.14'
     # via sgcc-theft-detector (pyproject.toml)
 pytz==2026.3.post1 ; python_full_version < '3.14'

@@ -184,7 +184,35 @@ python scripts/make_api_key.py otieno analyst
 
 PowerShell: `$env:ENV="production"; $env:API_KEYS='[{"name": "amina", "role": "supervisor", "sha256": "..."}]'`.
 
-Docker: `docker compose up --build` (fill in `.env` first; see `.env.example`).
+Settings can also go in a `.env` file in the repository root (gitignored; see
+`.env.example`): the API reads it at startup, and variables set in the terminal win.
+
+Docker is optional and never required: `docker compose up --build` (fill in `.env` first).
+
+### Windows with PostgreSQL (no Docker)
+
+With PostgreSQL installed locally (the Windows installer from postgresql.org, version
+16–18, service running on port 5432), in Command Prompt:
+
+```bat
+conda activate ml_env
+pip install -r requirements.lock
+python scripts/setup_database.py
+uvicorn backend.main:app --reload
+```
+
+`setup_database.py` asks for the password of the `postgres` superuser (the one chosen
+during installation) and for a password for the app's own role (Enter reuses the same).
+It creates the role `gridsentinel`, the database `gridsentinel` for the console and
+`gridsentinel_test` for the tests, creates the tables, and writes `DATABASE_URL` and
+`TEST_DATABASE_URL` into `.env`. It needs neither `psql` nor Docker, and running it
+again is safe. Then `http://127.0.0.1:8000/api/health` shows `"database": "postgresql"`,
+and cases, runs, the operating threshold and the audit log survive restarts. Uploads
+and PDFs stay on local disk (`artifacts/state/blobs`) unless `S3_BUCKET` is set.
+Use `--host`, `--port` or `--admin-user` for a different server.
+
+`pytest tests/` then runs against `gridsentinel_test` and never touches `gridsentinel`;
+without `TEST_DATABASE_URL` the tests use a temporary SQLite database.
 
 ### Roles and cases
 
@@ -203,7 +231,7 @@ records who made it, and every write, download and deletion goes to the audit lo
 
 | Setting | Effect |
 |---|---|
-| `DATABASE_URL` | PostgreSQL for cases, case events, scoring runs, settings (operating threshold, population), the upload and report catalogues and the audit log. Unset: SQLite in `SGCC_STATE_DIR` (one instance only) |
+| `DATABASE_URL` | PostgreSQL (`scripts/setup_database.py` creates it and writes this line to `.env`) for cases, case events, scoring runs, settings (operating threshold, population), the upload and report catalogues and the audit log. Unset: SQLite in `SGCC_STATE_DIR` (one instance only) |
 | `S3_BUCKET`, `S3_ENDPOINT_URL`, `S3_REGION`, `S3_PREFIX`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | S3-compatible object storage (AWS S3, Cloudflare R2, MinIO) for uploads and PDF reports. Unset: `SGCC_STATE_DIR/blobs` |
 | `RETENTION_DAYS` | Uploads and reports older than this are deleted at startup and every 6 hours (default 90; 0 keeps them). The upload in service as the population is kept |
 | `SCORING_INTERVAL_MINUTES` | Also score on a schedule (the pipeline always runs at startup and on demand) |
@@ -226,8 +254,7 @@ customer ids, ambiguous dates and missing features are rejected with the reason.
 ### Test the integrated model
 
 ```bash
-pytest tests/                                     # unit and API tests (SQLite)
-DATABASE_URL=postgresql://... pytest tests/       # the same against PostgreSQL
+pytest tests/                                     # unit and API tests: TEST_DATABASE_URL (from .env) or SQLite
 cd frontend && npm run e2e                        # Playwright: starts the API in production mode with two named keys
 python scripts/evaluate_api.py --url http://127.0.0.1:8000 --key <supervisor key>
 ```

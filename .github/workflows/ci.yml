@@ -42,7 +42,7 @@ jobs:
 
       - name: Run tests
         env:
-          DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql://gridsentinel:gridsentinel@127.0.0.1:5432/gridsentinel' || '' }}
+          TEST_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql://gridsentinel:gridsentinel@127.0.0.1:5432/gridsentinel' || '' }}
         run: pytest tests/ -v
 
   api-smoke-test:
