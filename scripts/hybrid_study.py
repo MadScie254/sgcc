@@ -13,6 +13,9 @@ w * CNN + (1 - w) * XGBoost, with w chosen on the validation customers (grid of 
 validation PR-AUC), recalibrated with Platt scaling on validation, and thresholded at the F1
 maximum on validation. The test customers are scored once. Nothing is chosen on test customers.
 
+``--significance`` adds, from the served model's saved test predictions (nothing refitted), a
+paired stratified bootstrap and McNemar's test of the hybrid against standard XGBoost and the CNN.
+
 Writes artifacts/hybrid_study.json and docs/thesis-figures/fig-5-26-hybrid-splits.
 """
 
@@ -34,6 +37,7 @@ from src.calibration import apply_platt, fit_platt  # noqa: E402
 from src.eval import classification_metrics  # noqa: E402
 from src.figstyle import ORANGE, SLATE, plt  # noqa: E402
 from src.modeling import select_threshold  # noqa: E402
+from src.stats import paired_comparison  # noqa: E402
 from src.study import fit_and_score, load_study  # noqa: E402
 
 OUT = ROOT / "artifacts" / "hybrid_study.json"
@@ -48,11 +52,41 @@ def blend_weight(y_val, cnn_val, xgb_val) -> float:
     return float(WEIGHTS[int(np.argmax(scores))])
 
 
+def served_significance() -> dict:
+    """The served hybrid against its two parts on the study's test customers, from the saved predictions."""
+    import pandas as pd
+
+    comparison = json.loads((ROOT / "models" / "baselines" / "comparison_results.json").read_text())
+    if "hybrid" not in comparison:
+        raise SystemExit("The served model is not the hybrid: run python -m src.train with PyTorch installed.")
+    test = pd.read_csv(ROOT / "artifacts" / "predictions" / "test.csv.gz")
+    y = test["label"].to_numpy(dtype=int)
+    names = ("hybrid", "xgboost", "wide_deep_cnn")
+    scores = {n: test[n].to_numpy(dtype=float) for n in names}
+    flags = {n: scores[n] >= comparison[n]["threshold"] for n in names}
+    pipelines, comparisons = paired_comparison(y, scores, flags, "hybrid")
+    return {"reference": "hybrid", "resamples": 10_000, "customers": int(len(y)), "theft": int(y.sum()),
+            "weight_sequence": comparison["hybrid"].get("weight_sequence"),
+            "thresholds": {n: comparison[n]["threshold"] for n in names},
+            "confusion_matrix": {n: comparison[n]["confusion_matrix"] for n in names},
+            "pipelines": pipelines, "comparisons": comparisons}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="CNN + XGBoost hybrid on six random splits")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--plot-only", action="store_true")
+    parser.add_argument("--significance", action="store_true", help="Only the served hybrid's paired tests")
     args = parser.parse_args()
+    if args.significance:
+        data = json.loads(OUT.read_text()) if OUT.exists() else {}
+        data["served_split"] = served_significance()
+        OUT.write_text(json.dumps(data, indent=2))
+        for other, c in data["served_split"]["comparisons"].items():
+            print(f"hybrid - {other}: " + ", ".join(
+                f"{m} {c[m]['difference']:+.3f} [{c[m]['ci_low']:+.3f}, {c[m]['ci_high']:+.3f}] p={c[m]['p_holm']:.4f}"
+                for m in ("pr_auc", "auc", "recall", "precision", "f1", "mcc")) + f"; McNemar p={c['mcnemar']['p_holm']:.3g}")
+        return
     if not args.plot_only:
         import deep_baseline as cnn
 
