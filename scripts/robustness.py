@@ -158,7 +158,8 @@ def plot_missingness(data: dict) -> None:
     for yi, m, s, k in zip(y, means, sds, labels):
         ax.text(m + s + 0.006, yi, f"{m:.3f}  ({variants[k]['features']} features)", va="center", fontsize=8, color=INK2)
     ax.axvline(data["base_rate"], color="#b9b8b2", ls="--", lw=1)
-    ax.text(data["base_rate"], len(labels) - 0.4, " random", fontsize=7.5, color=INK2, va="bottom")
+    ax.set_ylim(-0.8, len(labels) - 0.4)
+    ax.text(data["base_rate"], -0.72, f" random ({data['base_rate']:.3f})", fontsize=7.5, color=INK2, va="bottom")
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=8.5)
     ax.set_xlim(0, max(means) + 0.15)
